@@ -54,3 +54,17 @@ positional_arg_test :: proc(t: ^testing.T) {
     //testing.expect_value(t, res_test_pos_required, nil)
     testing.expect_value(t, ok, true)
 }
+
+
+@(test)
+help_test :: proc(t: ^testing.T) {
+    context.logger = log.create_console_logger()
+    test_switch_flag :: struct {
+        y: bool `cli:"y/yyy"`,
+        x: bool `cli:"x/xxx"`,
+        z: string `cli:"z/zzz"`,
+        w: string `cli:"w/www var1,var2,var3"`,
+    }
+    cmd1 := []string{"/path/to/myProg.exe", "positionX"}
+    res_test_pos_required, err_test_pos_required := parse(cmd1[1:], test_switch_flag)
+}

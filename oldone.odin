@@ -1,6 +1,7 @@
 package cleo
 
 import "core:fmt"
+import "core:log"
 import "core:reflect"
 import "core:strings"
 import "core:slice"
@@ -40,6 +41,8 @@ Metadata :: struct {
 
 @(private)
 FieldKind :: enum {
+    COMMAND,
+
     FLAG,
 
     OPTIONS,
@@ -49,6 +52,7 @@ FieldKind :: enum {
     OPTIONS_MANY_ANY,
 
     POSITIONAL,
+
     UNKNOWN,
 }
 
@@ -58,6 +62,7 @@ FieldKind :: enum {
 FieldTag :: struct {
     short:      string,
     long:       string,
+    desc:       string,
     required:   bool,
     options:    []string,
 }
@@ -70,6 +75,7 @@ Field :: struct {
     pos:  int,
     count: int,
     tag:  FieldTag,
+    fields: []Field,
 }
 
 @(private)
@@ -95,41 +101,61 @@ append_help_header :: proc(builder: ^strings.Builder) {
 append_help_footer :: proc(builder: ^strings.Builder) {
 }
 
+
+
 @(private)
 print_help :: proc(fields: []Field) {
-    positionals_builder := strings.builder_make_len(0)
-    defer strings.builder_destroy(&positionals_builder)
     flags_builder := strings.builder_make_len(0)
     defer strings.builder_destroy(&flags_builder)
-    append_help_header(&positionals_builder)
+
+    // Program description
+
+    // (USAGE) 
+    // maincmd [command] [arguments] 
+    // COMMANDS (Command)
+    // footer
+
+    // maincmd command [arguments]
+    // (USAGE) 
+    // (RUN)
+    fmt.sbprintf(&flags_builder,"\t%s\n\n", "Run") 
     for field in fields {
         #partial switch field.kind {
-        case FieldKind.POSITIONAL:{
-            //if strings.builder_len(positionals_builder) == 0 {
-            //   fmt.sbprintf(&flags_builder,"\t%s\n\n", "Flags") 
-            //}
-            //fmt.sbprintf(&flags_builder,"\t%s\n\t\t%s\n\n", field.name, "description") 
+        case FieldKind.POSITIONAL:{}
         }
-        case FieldKind.FLAG, FieldKind.OPTIONS, FieldKind.OPTIONS_MANY, FieldKind.OPTIONS_ANY, FieldKind.OPTIONS_MANY_ANY:{}
-            if strings.builder_len(flags_builder) == 0 {
-               fmt.sbprintf(&flags_builder,"\t%s\n\n", "Flags") 
-            }
-            if _, ok := field.type.variant.(reflect.Type_Info_Boolean); ok {
-                fmt.sbprintf(&flags_builder,"\t-%s\n\t\t%s\n\n", field.tag.long, "description") 
-            }else if len(field.tag.options) > 0 {
-                fmt.sbprintf(&flags_builder,"\t-%s:<option>\n\t\t%s\n\t\tAvailable options:", field.tag.long, "description") 
+    }
+    // FLAGS (Flags)
+    fmt.sbprintf(&flags_builder,"\t%s\n\n", "Flags") 
+    for field in fields {
+        #partial switch field.kind {
+        case FieldKind.FLAG:{
+                fmt.sbprintf(&flags_builder,"\t-%s\n", field.tag.long) 
+                if field.tag.desc != "" {
+                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.desc) 
+                }
+        }
+        case FieldKind.OPTIONS, FieldKind.OPTIONS_MANY:{
+                fmt.sbprintf(&flags_builder,"\t-%s:<option>\n", field.tag.long) 
+                if field.tag.desc != "" {
+                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.desc) 
+                }
+                fmt.sbprintf(&flags_builder,"\t\tAvailable options:\n") 
                 for opt in field.tag.options {
                     fmt.sbprintf(&flags_builder,"\t\t-%s: %s\n", field.tag.long, opt) 
                 }
-                fmt.sbprintf(&flags_builder,"\t-%s:<option>\n\t\t%s\n", field.tag.long, "description") 
-            }else {
-                fmt.sbprintf(&flags_builder,"\t-%s:<string>\n\t\t%s\n\n", field.tag.long, "description") 
-            }
+
         }
+        case FieldKind.OPTIONS_ANY, FieldKind.OPTIONS_MANY_ANY:{
+                fmt.sbprintf(&flags_builder,"\t-%s:<string>\n", field.tag.long) 
+                if field.tag.desc != "" {
+                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.desc) 
+                }
+        }
+
+    }
     }
     append_help_footer(&flags_builder)
     fmt.printf(fmt.sbprint(&flags_builder))
-    strings.builder_destroy(&flags_builder)
 }
 
 
@@ -155,7 +181,7 @@ parse_tag :: proc(tag: reflect.Struct_Tag) -> (field_tag: FieldTag, err: ParseEr
         if param == "required" {
             field_tag.required = true
         }else if strings.contains(param, "/"){
-            short_long := strings.split(val, "/")
+            short_long := strings.split(param, "/")
             defer delete(short_long)
             if len(short_long) == 2 {
                 field_tag.short = short_long[0]
@@ -164,6 +190,10 @@ parse_tag :: proc(tag: reflect.Struct_Tag) -> (field_tag: FieldTag, err: ParseEr
         }else if strings.contains(param, ","){
             field_tag.options = strings.split(param, ",")
         }
+    }
+    val, ok = reflect.struct_tag_lookup(tag, "desc");
+    if ok {
+        field_tag.desc = val    
     }
     return field_tag, err
 }
@@ -294,7 +324,7 @@ create_fields :: proc($T: typeid, fields: []Field, args: []Arg) -> (res: T, err:
     for field, i in fields {
         found := false
         for arg in args {
-            switch field.kind {
+            #partial switch field.kind {
             case FieldKind.FLAG:{
                 if arg.key == field.tag.short || arg.key == field.tag.long {
                     found = true
@@ -382,7 +412,7 @@ create_fields :: proc($T: typeid, fields: []Field, args: []Arg) -> (res: T, err:
                     flag^ = arg.value
                 }
             }
-            case FieldKind.UNKNOWN:{
+            case FieldKind.COMMAND:{
 
             }
             }
