@@ -1,11 +1,11 @@
 package cleo
-
 import "core:fmt"
 import "core:log"
 import "core:reflect"
 import "core:strings"
 import "core:slice"
 import "core:mem"
+import "core:bytes"
 
 @(private)
 InvalidFieldError       :: struct {} // Invalid field definition
@@ -60,22 +60,26 @@ FieldKind :: enum {
 
 @(private)
 FieldTag :: struct {
-    short:      string,
-    long:       string,
-    desc:       string,
-    required:   bool,
-    options:    []string,
+    short:          string,
+    long:           string,
+    help:           string,
+    value_label:    string,
+    required:       bool,
+    options:        []string,
 }
 
 @(private)
 Field :: struct {
-    kind: FieldKind,
-    name: string,
-    type: ^reflect.Type_Info,
-    pos:  int,
-    count: int,
-    tag:  FieldTag,
-    fields: []Field,
+    id: typeid,
+    kind:   FieldKind,
+    name:   string,
+    type:   ^reflect.Type_Info,
+    pos:    int,
+    count:  int,
+    size:   int,
+    offset:   int,
+    tag:    FieldTag,
+    fields: [dynamic]Field,
 }
 
 @(private)
@@ -86,25 +90,7 @@ Arg :: struct{
 }
 
 @(private)
-append_help_flag :: proc(builder: ^strings.Builder, field: Field) {
-}
-
-@(private)
-append_help_cmds :: proc(builder: ^strings.Builder, fields: []Field) {
-}
-
-@(private)
-append_help_header :: proc(builder: ^strings.Builder) {
-}
-
-@(private)
-append_help_footer :: proc(builder: ^strings.Builder) {
-}
-
-
-
-@(private)
-print_help :: proc(fields: []Field) {
+print_help :: proc(cmd: Field) {
     flags_builder := strings.builder_make_len(0)
     defer strings.builder_destroy(&flags_builder)
 
@@ -119,49 +105,54 @@ print_help :: proc(fields: []Field) {
     // (USAGE) 
     // (RUN)
     fmt.sbprintf(&flags_builder,"\t%s\n\n", "Run") 
-    for field in fields {
+    for field in cmd.fields {
         #partial switch field.kind {
         case FieldKind.POSITIONAL:{}
         }
     }
     // FLAGS (Flags)
     fmt.sbprintf(&flags_builder,"\t%s\n\n", "Flags") 
-    for field in fields {
+    for field in cmd.fields {
         #partial switch field.kind {
         case FieldKind.FLAG:{
                 fmt.sbprintf(&flags_builder,"\t-%s\n", field.tag.long) 
-                if field.tag.desc != "" {
-                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.desc) 
+                if len(field.tag.help) > 0 {
+                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.help) 
                 }
         }
         case FieldKind.OPTIONS, FieldKind.OPTIONS_MANY:{
-                fmt.sbprintf(&flags_builder,"\t-%s:<option>\n", field.tag.long) 
-                if field.tag.desc != "" {
-                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.desc) 
+                value_label := field.name
+                if len(field.tag.value_label) > 0 {
+                    value_label = field.tag.value_label
+                }
+                fmt.sbprintf(&flags_builder,"\t-%s: <%s>\n", field.tag.long, value_label) 
+                if len(field.tag.help) > 0 {
+                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.help) 
                 }
                 fmt.sbprintf(&flags_builder,"\t\tAvailable options:\n") 
                 for opt in field.tag.options {
                     fmt.sbprintf(&flags_builder,"\t\t-%s: %s\n", field.tag.long, opt) 
                 }
-
         }
         case FieldKind.OPTIONS_ANY, FieldKind.OPTIONS_MANY_ANY:{
-                fmt.sbprintf(&flags_builder,"\t-%s:<string>\n", field.tag.long) 
-                if field.tag.desc != "" {
-                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.desc) 
+                value_label := field.name
+                if len(field.tag.value_label) > 0 {
+                    value_label = field.tag.value_label
+                }
+                fmt.sbprintf(&flags_builder,"\t-%s:<%s>\n", field.tag.long, value_label) 
+                if len(field.tag.help) > 0 {
+                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.help) 
                 }
         }
 
     }
     }
-    append_help_footer(&flags_builder)
     fmt.printf(fmt.sbprint(&flags_builder))
 }
 
 
 @(private)
-get_metadata :: proc($T: typeid) -> Metadata {
-    id := typeid_of(T)
+get_metadata :: proc(id: typeid) -> Metadata {
     return Metadata{
         names   = reflect.struct_field_names(id),
 	    types   = reflect.struct_field_types(id),
@@ -175,25 +166,43 @@ parse_tag :: proc(tag: reflect.Struct_Tag) -> (field_tag: FieldTag, err: ParseEr
     if !ok {
         return field_tag, MissingTagFieldError{}
 	}
-    params := strings.split(val, " ")
+    params := strings.split(val, ",")
     defer delete(params)
-    for param in params {
+    i := 0
+    for i<len(params) {
+        param := params[i]
         if param == "required" {
             field_tag.required = true
-        }else if strings.contains(param, "/"){
-            short_long := strings.split(param, "/")
+        }
+        else if param[0] == '[' && param[len(param) - 1] == ']'{
+            field_tag.options = strings.split(param[1:len(param) - 1], "|")
+        }
+        else if  param[0] == '\''{
+            if param[len(param) - 1] != '\'' {
+                offset := 0
+                for i<len(params) && param[len(param) - 1] != '\'' {
+                    offset += 1
+                    i += 1
+                    param = params[i]
+                }
+                field_tag.help = strings.join(params[i - offset: i+1], ",")
+                field_tag.help = field_tag.help[1:len(field_tag.help)-1]
+            }else {
+                field_tag.help = param[1: len(param) - 1]
+            }
+        }
+        else if  param[0] == '<' && param[len(param) - 1] == '>'{
+            field_tag.value_label = param[1:len(param)-1]
+        }
+        else if strings.contains(param, "|"){
+            short_long := strings.split(param, "|")
             defer delete(short_long)
             if len(short_long) == 2 {
                 field_tag.short = short_long[0]
                 field_tag.long = short_long[1]
             }        
-        }else if strings.contains(param, ","){
-            field_tag.options = strings.split(param, ",")
-        }
-    }
-    val, ok = reflect.struct_tag_lookup(tag, "desc");
-    if ok {
-        field_tag.desc = val    
+        }    
+        i+=1
     }
     return field_tag, err
 }
@@ -202,13 +211,21 @@ parse_tag :: proc(tag: reflect.Struct_Tag) -> (field_tag: FieldTag, err: ParseEr
 parse_field :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_Tag) -> (field: Field, err: ParseError) {
     field_tag, parse_tag_err := parse_tag(tag)
     err = parse_tag_err
+    field.id = type.id
     field.tag = field_tag
     field.name = name
     field.type = type
+    field.size = type.size
     field.kind = FieldKind.UNKNOWN
     if _, ok := type.variant.(reflect.Type_Info_String); ok {
         if _, okk := parse_tag_err.(MissingTagFieldError); okk{
                 field.kind = FieldKind.POSITIONAL 
+                return field, nil
+        }
+    }
+    if _, ok := type.variant.(reflect.Type_Info_Union); ok {
+        if _, okk := parse_tag_err.(MissingTagFieldError); okk{
+                field.kind = FieldKind.COMMAND 
                 return field, nil
         }
     }
@@ -217,6 +234,9 @@ parse_field :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_
     }
     // Check type 
     #partial switch _ in type.variant {
+    case reflect.Type_Info_Union: {
+            field.kind = FieldKind.COMMAND      
+    }
     case reflect.Type_Info_Boolean: {   
         if field.tag.short != "" && field.tag.long != "" {
             field.kind = FieldKind.FLAG       
@@ -242,7 +262,6 @@ parse_field :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_
         }else {
             return field, InvalidFieldError{}
         }
-   
     }
     case:{
         return field, InvalidFieldError{}
@@ -251,11 +270,30 @@ parse_field :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_
     return field, err
 }
 
-//free_fields :: proc(fields: []Field) {
-//    for field in fields {
-//        delete(field.tag.options)
-//    }
-//}
+@(private)
+parse_metadata :: proc(cmd: ^Field, metadata: Metadata) -> (err: ParseError) {
+    cmd.fields = make([dynamic]Field, 0, 16)
+    j := 0
+    k := 0
+    for tag, i in metadata.tags {
+		name, type := metadata.names[i], metadata.types[i]
+        value := parse_field(name, type, tag) or_return
+        if value.kind == FieldKind.COMMAND {
+            parse_metadata(&value, get_metadata(value.type.id)) or_return
+        }else {
+            if value.kind == FieldKind.POSITIONAL {
+                value.pos = j
+                j += 1
+            }else {
+                value.pos = k
+                k += 1
+            }
+        }
+    
+        append(&cmd.fields, value)
+	}
+    return err
+}
 
 @(private)
 parse_arg_odin :: proc(arg_raw: string, pos: int) -> (arg: Arg) {
@@ -275,26 +313,6 @@ parse_arg_odin :: proc(arg_raw: string, pos: int) -> (arg: Arg) {
     return arg
 }
 
-@(private)
-parse_metadata :: proc(metadata: Metadata) -> (fields: [dynamic]Field, err: ParseError) {
-    fields = make([dynamic]Field, 0, 16)
-    j := 0
-    k := 0
-    for tag, i in metadata.tags {
-		name, type := metadata.names[i], metadata.types[i]
-        value := parse_field(name, type, tag) or_return
-        if value.kind == FieldKind.POSITIONAL {
-            value.pos = j
-            j += 1
-        }else {
-            value.pos = k
-            k += 1
-        }
-    
-        append(&fields, value)
-	}
-    return fields, err
-}
 
 
 @(private)
@@ -316,56 +334,81 @@ parse_argv :: proc(argv: []string) -> [dynamic]Arg {
     return args
 }
 
+
 @(private)
-create_fields :: proc($T: typeid, fields: []Field, args: []Arg) -> (res: T, err: ParseError) {
-    //res_b := mem.ptr_to_bytes(res, reflect.length(res))
+create_fields :: proc(cmd: ^Field, args: []Arg, out: []byte) -> (err: ParseError) {
     last_pos := 0
     exist := false
-    for field, i in fields {
+    for &field, i in cmd.fields {
         found := false
-        for arg in args {
+        for arg, i in args {
             #partial switch field.kind {
+            case FieldKind.COMMAND:{
+                union_type, ok := field.type.variant.(reflect.Type_Info_Union)
+                if ok {
+                    for v in union_type.variants {
+                        vp, ok := v.variant.(reflect.Type_Info_Named)
+                        if arg.value == vp.name {
+                            sf := reflect.struct_field_by_name(cmd.id, field.name)
+                            found = true
+                            exist = true
+
+                            dest := raw_data(out[sf.offset:])
+                            reflect.set_union_variant_type_info(dest, vp.base)
+                            create_fields(&field, args[i:], out[sf.offset:]) or_return
+                        }
+                    }
+                }
+                //if arg.value == field.name {
+                //    //field.type.variant.(reflect.Type_Info_Union)
+                //    sf := reflect.struct_field_by_name(cmd.id, field.name)
+                //    create_fields(&field, args[i:], out[sf.offset:]) or_return
+                //}            
+            }
             case FieldKind.FLAG:{
                 if arg.key == field.tag.short || arg.key == field.tag.long {
+                    sf := reflect.struct_field_by_name(cmd.id, field.name)
                     found = true
                     exist = true
-                    sf := reflect.struct_field_by_name(T, field.name)
-                    res_c := (^byte)(&res)
-                    flag := (^bool)(mem.ptr_offset(res_c, sf.offset))
-                    flag^ = true
+                    data := true
+                    src := &data
+                    dest := raw_data(out[sf.offset:])
+                    mem.copy(dest, src, field.type.size)
                 }
             }
             case FieldKind.OPTIONS:{
                 if ((arg.key == field.tag.short || arg.key == field.tag.long)){
                     if slice.contains(field.tag.options, arg.value) {
+                    sf := reflect.struct_field_by_name(cmd.id, field.name)
                         found = true
                         exist = true
-                        sf := reflect.struct_field_by_name(T, field.name)
-                        res_c := (^byte)(&res)
-                        flag := (^string)(mem.ptr_offset(res_c, sf.offset))
-                        flag^ = arg.value
+
+                        data := arg.value
+                        src := &data
+                        dest := raw_data(out[sf.offset:])
+                        mem.copy(dest, src, field.type.size)
                     }else {
-                        return res, BadValueFieldError{}
+                        return BadValueFieldError{}
                     }
                 }
             }
             case FieldKind.OPTIONS_ANY:{
                 if arg.key == field.tag.short || arg.key == field.tag.long {
+                    sf := reflect.struct_field_by_name(cmd.id, field.name)
                     found = true
                     exist = true
-                    sf := reflect.struct_field_by_name(T, field.name)
-                    res_c := (^byte)(&res)
-                    flag := (^string)(mem.ptr_offset(res_c, sf.offset))
-                    flag^ = arg.value
+                    data := arg.value
+                    src := &data
+                    dest := raw_data(out[sf.offset:])
+                    mem.copy(dest, src, field.type.size)
                 }
             }
 
             case FieldKind.OPTIONS_MANY:{
                 if arg.key == field.tag.short || arg.key == field.tag.long {
+                    sf := reflect.struct_field_by_name(cmd.id, field.name)
                     found = true
                     exist = true
-                    sf := reflect.struct_field_by_name(T, field.name)
-                    res_c := (^byte)(&res)
                     value_split := strings.split(arg.value, ",")
                     defer delete(value_split)
                     if len(value_split) <= field.count {
@@ -376,44 +419,45 @@ create_fields :: proc($T: typeid, fields: []Field, args: []Arg) -> (res: T, err:
                             }
                         }
                         if valid {
-                            flag := mem.ptr_offset(res_c, sf.offset)                     
-                            mem.copy(flag, raw_data(value_split), size_of(value_split)*len(value_split)) 
+                            data := arg.value
+                            src := raw_data(value_split) 
+                            dest := raw_data(out[sf.offset:])
+                            mem.copy(dest, src, field.type.size)
                         }else {
-                            return res, BadValueFieldError{}
+                            return BadValueFieldError{}
                         }
                     }else {
-                        return res, OutOfBoundFieldError{}
+                        return OutOfBoundFieldError{}
                     }
                 }
             }
             case FieldKind.OPTIONS_MANY_ANY:{
                 if arg.key == field.tag.short || arg.key == field.tag.long {
+                    sf := reflect.struct_field_by_name(cmd.id, field.name)
                     exist = true
                     found = true
-                    sf := reflect.struct_field_by_name(T, field.name)
-                    res_c := (^byte)(&res)
                     value_split := strings.split(arg.value, ",")
                     defer delete(value_split)
                     if len(value_split) <= field.count {
-                        flag := mem.ptr_offset(res_c, sf.offset)                     
-                        mem.copy(flag, raw_data(value_split), size_of(value_split)*len(value_split)) 
+                        data := arg.value
+                        src := raw_data(value_split) 
+                        dest := raw_data(out[sf.offset:])
+                        mem.copy(dest, src, field.type.size)
                     }else {
-                        return res, OutOfBoundFieldError{}
+                        return OutOfBoundFieldError{}
                     }
                 }
             }
             case FieldKind.POSITIONAL:{
                 if field.pos == arg.pos {
+                    sf := reflect.struct_field_by_name(cmd.id, field.name)
                     exist = true
                     found = true
-                    sf := reflect.struct_field_by_name(T, field.name)
-                    res_c := (^byte)(&res)
-                    flag := (^string)(mem.ptr_offset(res_c, sf.offset))
-                    flag^ = arg.value
+                    data := arg.value
+                    src := rawptr(&data) 
+                    dest := raw_data(out[sf.offset:])
+                    mem.copy(dest, src, len(data))
                 }
-            }
-            case FieldKind.COMMAND:{
-
             }
             }
         }
@@ -426,16 +470,25 @@ create_fields :: proc($T: typeid, fields: []Field, args: []Arg) -> (res: T, err:
             err = UnknownFieldError{}
     }
 
-    return res, err
+    return err
 }
 
-parse :: proc(argv: []string, $T: typeid) -> (res: T, err: ParseError) {
-    fields := parse_metadata(get_metadata(T)) or_return
-    defer delete(fields)
+parse :: proc(argv: []string, $T: typeid) -> (res: ^T, err: ParseError) {
+    cmd := Field{
+        id = T,
+        name = "oldone",
+        kind = FieldKind.COMMAND,
+        size = size_of(T),
+        offset = -1
+    }
+    parse_metadata(&cmd, get_metadata(T)) or_return
+    defer delete(cmd.fields)
     args := parse_argv(argv)
     defer delete(args)
-    res, err = create_fields(T, fields[:], args[:])
-    print_help(fields[:])
+    out := make([]byte, size_of(T))
+    create_fields(&cmd, args[:], out) or_return
+    //print_help(cmd)
+    res = (^T)(raw_data(out))
     return res, err 
 }
 
