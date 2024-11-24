@@ -6,6 +6,7 @@ import "core:strings"
 import "core:slice"
 import "core:mem"
 import "core:bytes"
+import "base:runtime"
 
 @(private)
 InvalidFieldError       :: struct {} // Invalid field definition
@@ -42,6 +43,7 @@ Metadata :: struct {
 @(private)
 FieldKind :: enum {
     COMMAND,
+    COMMANDS,
 
     FLAG,
 
@@ -55,8 +57,6 @@ FieldKind :: enum {
 
     UNKNOWN,
 }
-
-
 
 @(private)
 FieldTag :: struct {
@@ -77,7 +77,8 @@ Field :: struct {
     pos:    int,
     count:  int,
     size:   int,
-    offset:   int,
+    offset:   uintptr,
+    tag_offset:   uintptr,
     tag:    FieldTag,
     fields: [dynamic]Field,
 }
@@ -208,34 +209,39 @@ parse_tag :: proc(tag: reflect.Struct_Tag) -> (field_tag: FieldTag, err: ParseEr
 }
 
 @(private)
-parse_field :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_Tag) -> (field: Field, err: ParseError) {
-    field_tag, parse_tag_err := parse_tag(tag)
-    err = parse_tag_err
+parse_def :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_Tag) -> (field: Field, err: ParseError) {
     field.id = type.id
-    field.tag = field_tag
     field.name = name
     field.type = type
     field.size = type.size
     field.kind = FieldKind.UNKNOWN
-    if _, ok := type.variant.(reflect.Type_Info_String); ok {
-        if _, okk := parse_tag_err.(MissingTagFieldError); okk{
-                field.kind = FieldKind.POSITIONAL 
-                return field, nil
-        }
-    }
-    if _, ok := type.variant.(reflect.Type_Info_Union); ok {
-        if _, okk := parse_tag_err.(MissingTagFieldError); okk{
-                field.kind = FieldKind.COMMAND 
-                return field, nil
-        }
-    }
-    if parse_tag_err != nil {
-        return field, parse_tag_err
+
+    field_tag, parse_tag_err := parse_tag(tag)
+    field.tag = field_tag
+    if parse_tag_err != nil && !reflect.is_string(type) && !reflect.is_union(type) {
+            return field, parse_tag_err
     }
     // Check type 
-    #partial switch _ in type.variant {
+    #partial switch t in type.variant {
     case reflect.Type_Info_Union: {
-            field.kind = FieldKind.COMMAND      
+            field.kind = FieldKind.COMMANDS      
+
+            field.tag_offset = t.tag_offset
+            for v in t.variants {
+                vp, ok := v.variant.(reflect.Type_Info_Named)
+                if ok {
+                    sub_cmd := Field{
+                        id = vp.base.id,
+                        name = vp.name,
+                        type = vp.base,
+                        size = vp.base.size,
+                        kind = FieldKind.COMMAND,
+                    }
+                    metadata := get_metadata(v.id)
+                    parse_metadata(&sub_cmd, metadata)
+                    append(&field.fields, sub_cmd)
+                }
+            }
     }
     case reflect.Type_Info_Boolean: {   
         if field.tag.short != "" && field.tag.long != "" {
@@ -277,7 +283,9 @@ parse_metadata :: proc(cmd: ^Field, metadata: Metadata) -> (err: ParseError) {
     k := 0
     for tag, i in metadata.tags {
 		name, type := metadata.names[i], metadata.types[i]
-        value := parse_field(name, type, tag) or_return
+        value := parse_def(name, type, tag) or_return
+        sf := reflect.struct_field_by_name(cmd.id, value.name)
+        value.offset = sf.offset
         if value.kind == FieldKind.COMMAND {
             parse_metadata(&value, get_metadata(value.type.id)) or_return
         }else {
@@ -313,8 +321,6 @@ parse_arg_odin :: proc(arg_raw: string, pos: int) -> (arg: Arg) {
     return arg
 }
 
-
-
 @(private)
 parse_argv :: proc(argv: []string) -> [dynamic]Arg {
     args := make([dynamic]Arg, 0, 16)
@@ -336,34 +342,25 @@ parse_argv :: proc(argv: []string) -> [dynamic]Arg {
 
 
 @(private)
-create_fields :: proc(cmd: ^Field, args: []Arg, out: []byte) -> (err: ParseError) {
+transmute_fields :: proc(cmd: ^Field, args: []Arg, out: []byte) -> (err: ParseError) {
     last_pos := 0
     exist := false
     for &field, i in cmd.fields {
         found := false
-        for arg, i in args {
+        for arg, j in args {
             #partial switch field.kind {
-            case FieldKind.COMMAND:{
-                union_type, ok := field.type.variant.(reflect.Type_Info_Union)
-                if ok {
-                    for v in union_type.variants {
-                        vp, ok := v.variant.(reflect.Type_Info_Named)
-                        if arg.value == vp.name {
-                            sf := reflect.struct_field_by_name(cmd.id, field.name)
-                            found = true
-                            exist = true
-
-                            dest := raw_data(out[sf.offset:])
-                            reflect.set_union_variant_type_info(dest, vp.base)
-                            create_fields(&field, args[i:], out[sf.offset:]) or_return
-                        }
+            case FieldKind.COMMANDS:{
+                for &sub_cmd, k in field.fields {
+                    if arg.value == sub_cmd.name {
+                        found = true
+                        exist = true
+                        union_type, union_ok := field.type.variant.(reflect.Type_Info_Union)
+                        named, named_ok:= sub_cmd.type.variant.(reflect.Type_Info_Named)
+                        variant_tag := k+1
+                        out[field.offset + union_type.tag_offset] = u8(k + 1)
+                        transmute_fields(&sub_cmd, args, out[field.offset:]) or_return
                     }
                 }
-                //if arg.value == field.name {
-                //    //field.type.variant.(reflect.Type_Info_Union)
-                //    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                //    create_fields(&field, args[i:], out[sf.offset:]) or_return
-                //}            
             }
             case FieldKind.FLAG:{
                 if arg.key == field.tag.short || arg.key == field.tag.long {
@@ -466,9 +463,9 @@ create_fields :: proc(cmd: ^Field, args: []Arg, out: []byte) -> (err: ParseError
         }
         found = false
     }
-    if !exist {
-            err = UnknownFieldError{}
-    }
+    //if !exist {
+    //        err = UnknownFieldError{}
+    //}
 
     return err
 }
@@ -479,14 +476,13 @@ parse :: proc(argv: []string, $T: typeid) -> (res: ^T, err: ParseError) {
         name = "oldone",
         kind = FieldKind.COMMAND,
         size = size_of(T),
-        offset = -1
     }
     parse_metadata(&cmd, get_metadata(T)) or_return
     defer delete(cmd.fields)
     args := parse_argv(argv)
     defer delete(args)
     out := make([]byte, size_of(T))
-    create_fields(&cmd, args[:], out) or_return
+    transmute_fields(&cmd, args[:], out) or_return
     //print_help(cmd)
     res = (^T)(raw_data(out))
     return res, err 

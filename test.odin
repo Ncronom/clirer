@@ -13,12 +13,13 @@ import "core:testing"
 @(test)
 help_test :: proc(t: ^testing.T) {
     subcmd :: struct {
-        xxx: bool `cli:"x/xxx"`,
-        yyy: bool `cli:"y/yyy"`,
+        xxx: bool `cli:"x|xxx"`,
+        yyy: bool `cli:"y|yyy"`,
     }
     subcmd2 :: struct {
-        zzz: bool `cli:"z/zzz"`,
-        www: bool `cli:"w/www"`,
+        zzz: bool `cli:"z|zzz"`,
+        www: bool `cli:"w|www"`,
+        aaa: bool `cli:"a|aaa"`,
     }
     cmd :: struct {
         subcmd: union {
@@ -28,9 +29,8 @@ help_test :: proc(t: ^testing.T) {
         //arg1: bool `cli:"a1|arg1"`,
         //arg2: bool `cli:"a2|arg2"`,
     }
-    cmd1 := []string{"/path/to/myProg.exe", "subcmd", "-yyy"}
+    cmd1 := []string{"/path/to/myProg.exe", "subcmd2", "-zzz"}
     res, err := parse(cmd1[1:], cmd)
-    err_parsed, ok := err.(UnknownFieldError)
     //testing.expect_value(t, ok, true)
 }
 
