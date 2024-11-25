@@ -1,495 +1,216 @@
-package cleo
-import "core:fmt"
+package oldone
+
 import "core:log"
 import "core:reflect"
-import "core:strings"
-import "core:slice"
+import "core:testing"
 import "core:mem"
-import "core:bytes"
-import "base:runtime"
+import "core:os"
+import "core:strings"
+import "core:fmt"
 
-@(private)
-InvalidFieldError       :: struct {} // Invalid field definition
-@(private)
-MissingFieldError       :: struct {} // required field missing
-@(private)
-MissingTagFieldError    :: struct {} // required tag field missing
-@(private)
-UnknownFieldError       :: struct {} // field doesn't exist
-@(private)
-BadValueFieldError      :: struct {} // field value exceed array capacity
-@(private)
-OutOfBoundFieldError    :: struct {} // field value exceed array capacity
-
-@(private)
-ParseError :: union {
-    InvalidFieldError,      // DONE
-    MissingFieldError,      // DONE
-    MissingTagFieldError,   // DONE
-    UnknownFieldError,      // DONE
-    BadValueFieldError,     // DONE
-    OutOfBoundFieldError,   // DONE
+CLIParseError :: struct {
+    msg: string,
 }
 
-// TODO: implement -help
-
-@(private)
-Metadata :: struct {
-    names: []string,
-    types: []^reflect.Type_Info, 
-    tags:  []reflect.Struct_Tag, 
+CLIError :: union {
+    CLIParseError
 }
 
-@(private)
-FieldKind :: enum {
-    COMMAND,
-    COMMANDS,
-
-    FLAG,
-
-    OPTIONS,
-    OPTIONS_ANY,
-
-    OPTIONS_MANY,
-    OPTIONS_MANY_ANY,
-
-    POSITIONAL,
-
-    UNKNOWN,
+Tag :: struct {
+    help:       string,
+    required:   bool,
+    short:      string,
+    long:       string,
+    value:      string,
+    options:    []string,
 }
 
-@(private)
-FieldTag :: struct {
-    short:          string,
-    long:           string,
-    help:           string,
-    value_label:    string,
-    required:       bool,
-    options:        []string,
-}
-
-@(private)
-Field :: struct {
-    id: typeid,
-    kind:   FieldKind,
-    name:   string,
-    type:   ^reflect.Type_Info,
-    pos:    int,
-    count:  int,
-    size:   int,
-    offset:   uintptr,
-    tag_offset:   uintptr,
-    tag:    FieldTag,
-    fields: [dynamic]Field,
-}
-
-@(private)
-Arg :: struct{
-    key:    string,
-    value:  string,
-    pos:    int
-}
-
-@(private)
-print_help :: proc(cmd: Field) {
-    flags_builder := strings.builder_make_len(0)
-    defer strings.builder_destroy(&flags_builder)
-
-    // Program description
-
-    // (USAGE) 
-    // maincmd [command] [arguments] 
-    // COMMANDS (Command)
-    // footer
-
-    // maincmd command [arguments]
-    // (USAGE) 
-    // (RUN)
-    fmt.sbprintf(&flags_builder,"\t%s\n\n", "Run") 
-    for field in cmd.fields {
-        #partial switch field.kind {
-        case FieldKind.POSITIONAL:{}
-        }
-    }
-    // FLAGS (Flags)
-    fmt.sbprintf(&flags_builder,"\t%s\n\n", "Flags") 
-    for field in cmd.fields {
-        #partial switch field.kind {
-        case FieldKind.FLAG:{
-                fmt.sbprintf(&flags_builder,"\t-%s\n", field.tag.long) 
-                if len(field.tag.help) > 0 {
-                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.help) 
-                }
-        }
-        case FieldKind.OPTIONS, FieldKind.OPTIONS_MANY:{
-                value_label := field.name
-                if len(field.tag.value_label) > 0 {
-                    value_label = field.tag.value_label
-                }
-                fmt.sbprintf(&flags_builder,"\t-%s: <%s>\n", field.tag.long, value_label) 
-                if len(field.tag.help) > 0 {
-                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.help) 
-                }
-                fmt.sbprintf(&flags_builder,"\t\tAvailable options:\n") 
-                for opt in field.tag.options {
-                    fmt.sbprintf(&flags_builder,"\t\t-%s: %s\n", field.tag.long, opt) 
-                }
-        }
-        case FieldKind.OPTIONS_ANY, FieldKind.OPTIONS_MANY_ANY:{
-                value_label := field.name
-                if len(field.tag.value_label) > 0 {
-                    value_label = field.tag.value_label
-                }
-                fmt.sbprintf(&flags_builder,"\t-%s:<%s>\n", field.tag.long, value_label) 
-                if len(field.tag.help) > 0 {
-                    fmt.sbprintf(&flags_builder,"\t\t%s\n", field.tag.help) 
-                }
-        }
-
-    }
-    }
-    fmt.printf(fmt.sbprint(&flags_builder))
-}
-
-
-@(private)
-get_metadata :: proc(id: typeid) -> Metadata {
-    return Metadata{
-        names   = reflect.struct_field_names(id),
-	    types   = reflect.struct_field_types(id),
-	    tags    = reflect.struct_field_tags(id),
-    }
-}
-
-@(private)
-parse_tag :: proc(tag: reflect.Struct_Tag) -> (field_tag: FieldTag, err: ParseError) {
-    val, ok := reflect.struct_tag_lookup(tag, "cli");
-    if !ok {
-        return field_tag, MissingTagFieldError{}
-	}
-    params := strings.split(val, ",")
-    defer delete(params)
-    i := 0
-    for i<len(params) {
-        param := params[i]
-        if param == "required" {
-            field_tag.required = true
-        }
-        else if param[0] == '[' && param[len(param) - 1] == ']'{
-            field_tag.options = strings.split(param[1:len(param) - 1], "|")
-        }
-        else if  param[0] == '\''{
-            if param[len(param) - 1] != '\'' {
-                offset := 0
-                for i<len(params) && param[len(param) - 1] != '\'' {
-                    offset += 1
-                    i += 1
-                    param = params[i]
-                }
-                field_tag.help = strings.join(params[i - offset: i+1], ",")
-                field_tag.help = field_tag.help[1:len(field_tag.help)-1]
-            }else {
-                field_tag.help = param[1: len(param) - 1]
+parse_tag :: proc(tag_type: reflect.Struct_Tag) -> (tag: Tag, exist: bool) {
+    raw_tag, ok := reflect.struct_tag_lookup(tag_type, "cli")
+    if ok {
+        params := strings.split(raw_tag, ",")
+        defer delete(params)
+        i := 0
+        for i<len(params) {
+            param := params[i]
+            if param == "required" {
+                tag.required = true
             }
-        }
-        else if  param[0] == '<' && param[len(param) - 1] == '>'{
-            field_tag.value_label = param[1:len(param)-1]
-        }
-        else if strings.contains(param, "|"){
-            short_long := strings.split(param, "|")
-            defer delete(short_long)
-            if len(short_long) == 2 {
-                field_tag.short = short_long[0]
-                field_tag.long = short_long[1]
-            }        
-        }    
-        i+=1
-    }
-    return field_tag, err
-}
-
-@(private)
-parse_def :: proc(name: string, type: ^reflect.Type_Info, tag: reflect.Struct_Tag) -> (field: Field, err: ParseError) {
-    field.id = type.id
-    field.name = name
-    field.type = type
-    field.size = type.size
-    field.kind = FieldKind.UNKNOWN
-
-    field_tag, parse_tag_err := parse_tag(tag)
-    field.tag = field_tag
-    if parse_tag_err != nil && !reflect.is_string(type) && !reflect.is_union(type) {
-            return field, parse_tag_err
-    }
-    // Check type 
-    #partial switch t in type.variant {
-    case reflect.Type_Info_Union: {
-            field.kind = FieldKind.COMMANDS      
-
-            field.tag_offset = t.tag_offset
-            for v in t.variants {
-                vp, ok := v.variant.(reflect.Type_Info_Named)
-                if ok {
-                    sub_cmd := Field{
-                        id = vp.base.id,
-                        name = vp.name,
-                        type = vp.base,
-                        size = vp.base.size,
-                        kind = FieldKind.COMMAND,
+            else if param[0] == '[' && param[len(param) - 1] == ']'{
+                tag.options = strings.split(param[1:len(param) - 1], "|")
+            }
+            else if  param[0] == '\''{
+                if param[len(param) - 1] != '\'' {
+                    offset := 0
+                    for i<len(params) && param[len(param) - 1] != '\'' {
+                        offset += 1
+                        i += 1
+                        param = params[i]
                     }
-                    metadata := get_metadata(v.id)
-                    parse_metadata(&sub_cmd, metadata)
-                    append(&field.fields, sub_cmd)
+                    tag.help = strings.join(params[i - offset: i+1], ",")
+                    tag.help = tag.help[1:len(tag.help)-1]
+                }else {
+                    tag.help = param[1: len(param) - 1]
                 }
             }
-    }
-    case reflect.Type_Info_Boolean: {   
-        if field.tag.short != "" && field.tag.long != "" {
-            field.kind = FieldKind.FLAG       
-        }
-    }
-    case reflect.Type_Info_String: {
-        if field.tag.short != "" && field.tag.long != "" && len(field.tag.options) > 0 {
-            field.kind = FieldKind.OPTIONS 
-        }else if field.tag.short != "" && field.tag.long != "" && len(field.tag.options) == 0 {
-            field.kind = FieldKind.OPTIONS_ANY 
-        }else if field.tag.short == "" && field.tag.long == ""{
-            field.kind = FieldKind.POSITIONAL 
-        }else {
-            return field, InvalidFieldError{}
-        }
-    }
-    case reflect.Type_Info_Array:   {
-        field.count = type.variant.(reflect.Type_Info_Array).count
-        if field.tag.short != "" && field.tag.long != "" && len(field.tag.options) > 0 {
-            field.kind = FieldKind.OPTIONS_MANY
-        }else if field.tag.short != "" && field.tag.long != "" && len(field.tag.options) == 0 {
-            field.kind = FieldKind.OPTIONS_MANY_ANY 
-        }else {
-            return field, InvalidFieldError{}
-        }
-    }
-    case:{
-        return field, InvalidFieldError{}
-    }
-    }
-    return field, err
-}
-
-@(private)
-parse_metadata :: proc(cmd: ^Field, metadata: Metadata) -> (err: ParseError) {
-    cmd.fields = make([dynamic]Field, 0, 16)
-    j := 0
-    k := 0
-    for tag, i in metadata.tags {
-		name, type := metadata.names[i], metadata.types[i]
-        value := parse_def(name, type, tag) or_return
-        sf := reflect.struct_field_by_name(cmd.id, value.name)
-        value.offset = sf.offset
-        if value.kind == FieldKind.COMMAND {
-            parse_metadata(&value, get_metadata(value.type.id)) or_return
-        }else {
-            if value.kind == FieldKind.POSITIONAL {
-                value.pos = j
-                j += 1
-            }else {
-                value.pos = k
-                k += 1
+            else if  param[0] == '<' && param[len(param) - 1] == '>'{
+                tag.value = param[1:len(param)-1]
             }
-        }
-    
-        append(&cmd.fields, value)
-	}
-    return err
-}
-
-@(private)
-parse_arg_odin :: proc(arg_raw: string, pos: int) -> (arg: Arg) {
-    arg.pos = pos
-    arg.value = arg_raw
-    key_value := strings.split(arg_raw, ":")
-    defer delete(key_value)
-    if arg_raw[0] == '-' {
-        substr, ok := strings.substring_from(key_value[0], 1)
-        arg.key = substr
-        if len(key_value) == 2 {
-            arg.value = key_value[1]
-        }else if len(key_value) == 1 {
-            arg.value = ""
+            else if strings.contains(param, "|"){
+                short_long := strings.split(param, "|")
+                defer delete(short_long)
+                if len(short_long) == 2 {
+                    tag.short = short_long[0]
+                    tag.long = short_long[1]
+                }        
+            }    
+            i+=1
         }
     }
-    return arg
+    return tag, exist 
 }
 
-@(private)
-parse_argv :: proc(argv: []string) -> [dynamic]Arg {
-    args := make([dynamic]Arg, 0, 16)
-    j := 0
-    k := 0
-    for arg, i in argv {
-        value := parse_arg_odin(arg, i)
-        if value.key == "" {
-            value.pos = j
-            j += 1
-        }else {
-            value.pos = k
-            k += 1
-        }
-        append(&args, value)
-	}
-    return args
+arg_name :: proc(raw_arg: string) -> string {
+    index := strings.index(raw_arg, ":")
+    name := raw_arg[1:]
+    if index >= 0 {
+        name = name[:index - 1]
+    }
+    return name 
 }
 
+arg_value :: proc(raw_arg: string) -> string {
+    index := strings.index(raw_arg, ":")
+    value := "" 
+    if index >= 0 {
+        value = raw_arg[index+1:]
+    }
+    return value 
+}
 
-@(private)
-transmute_fields :: proc(cmd: ^Field, args: []Arg, out: []byte) -> (err: ParseError) {
-    last_pos := 0
-    exist := false
-    for &field, i in cmd.fields {
-        found := false
-        for arg, j in args {
-            #partial switch field.kind {
-            case FieldKind.COMMANDS:{
-                for &sub_cmd, k in field.fields {
-                    if arg.value == sub_cmd.name {
-                        found = true
-                        exist = true
-                        union_type, union_ok := field.type.variant.(reflect.Type_Info_Union)
-                        named, named_ok:= sub_cmd.type.variant.(reflect.Type_Info_Named)
-                        variant_tag := k+1
-                        out[field.offset + union_type.tag_offset] = u8(k + 1)
-                        transmute_fields(&sub_cmd, args, out[field.offset:]) or_return
+parse_struct :: proc(data: []byte, args: []string, info: ^reflect.Type_Info) -> (err: CLIError){
+    names :=    reflect.struct_field_names(info.id)
+    tags :=     reflect.struct_field_tags(info.id)
+    types :=    reflect.struct_field_types(info.id)
+    offsets :=  reflect.struct_field_offsets(info.id)
+    for name, j in names {
+        tag, exist := parse_tag(tags[j])
+        offseted_data := data[offsets[j]:]
+        for &arg, i in args {
+            name_arg := arg_name(arg)
+            value_arg := arg_value(arg)
+            if name_arg == tag.short || name_arg == tag.long {
+                #partial switch t in types[j].variant {
+                case reflect.Type_Info_Boolean: {   // FLAG
+                    offseted_data[0] = 1
+                }
+                case reflect.Type_Info_Enum:    {   // OPTION
+                    for f, k in t.names {
+                        if value_arg == f {
+                            mem.copy(raw_data(offseted_data), &t.values[k], types[j].size)  
+                        }
                     }
-                }
-            }
-            case FieldKind.FLAG:{
-                if arg.key == field.tag.short || arg.key == field.tag.long {
-                    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                    found = true
-                    exist = true
-                    data := true
-                    src := &data
-                    dest := raw_data(out[sf.offset:])
-                    mem.copy(dest, src, field.type.size)
-                }
-            }
-            case FieldKind.OPTIONS:{
-                if ((arg.key == field.tag.short || arg.key == field.tag.long)){
-                    if slice.contains(field.tag.options, arg.value) {
-                    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                        found = true
-                        exist = true
-
-                        data := arg.value
-                        src := &data
-                        dest := raw_data(out[sf.offset:])
-                        mem.copy(dest, src, field.type.size)
-                    }else {
-                        return BadValueFieldError{}
-                    }
-                }
-            }
-            case FieldKind.OPTIONS_ANY:{
-                if arg.key == field.tag.short || arg.key == field.tag.long {
-                    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                    found = true
-                    exist = true
-                    data := arg.value
-                    src := &data
-                    dest := raw_data(out[sf.offset:])
-                    mem.copy(dest, src, field.type.size)
-                }
-            }
-
-            case FieldKind.OPTIONS_MANY:{
-                if arg.key == field.tag.short || arg.key == field.tag.long {
-                    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                    found = true
-                    exist = true
-                    value_split := strings.split(arg.value, ",")
-                    defer delete(value_split)
-                    if len(value_split) <= field.count {
-                        valid := true
-                        for vs in value_split {
-                            if !slice.contains(field.tag.options, vs) {
-                                valid = false 
+                } 
+                case reflect.Type_Info_String:  {   // VALUE
+                    mem.copy(raw_data(offseted_data), &value_arg, types[j].size)  
+                } 
+                case reflect.Type_Info_Array:   {
+                   splited_value := strings.split(value_arg, ",")
+                   if enum_type, ok := t.elem.variant.(reflect.Type_Info_Enum); ok { // N OPTIONS
+                        for sv, k in splited_value {
+                            for f, l in enum_type.names {
+                                if sv == f {
+                                    mem.copy(raw_data(offseted_data[k*size_of(reflect.Type_Info_Enum_Value):]), &enum_type.values[l], size_of(reflect.Type_Info_Enum_Value))  
+                                }
                             }
                         }
-                        if valid {
-                            data := arg.value
-                            src := raw_data(value_split) 
-                            dest := raw_data(out[sf.offset:])
-                            mem.copy(dest, src, field.type.size)
-                        }else {
-                            return BadValueFieldError{}
+                   }else { // N VALUES
+                        if len(splited_value) <= t.count {
+                            mem.copy(raw_data(offseted_data), raw_data(splited_value), len(splited_value)*size_of(string))  
                         }
-                    }else {
-                        return OutOfBoundFieldError{}
-                    }
+                   }
                 }
-            }
-            case FieldKind.OPTIONS_MANY_ANY:{
-                if arg.key == field.tag.short || arg.key == field.tag.long {
-                    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                    exist = true
-                    found = true
-                    value_split := strings.split(arg.value, ",")
-                    defer delete(value_split)
-                    if len(value_split) <= field.count {
-                        data := arg.value
-                        src := raw_data(value_split) 
-                        dest := raw_data(out[sf.offset:])
-                        mem.copy(dest, src, field.type.size)
-                    }else {
-                        return OutOfBoundFieldError{}
-                    }
+                case: {}
                 }
-            }
-            case FieldKind.POSITIONAL:{
-                if field.pos == arg.pos {
-                    sf := reflect.struct_field_by_name(cmd.id, field.name)
-                    exist = true
-                    found = true
-                    data := arg.value
-                    src := rawptr(&data) 
-                    dest := raw_data(out[sf.offset:])
-                    mem.copy(dest, src, len(data))
+            }else if _, ok := types[j].variant.(reflect.Type_Info_String); ok { // POSITIONAL 
+                if len(tag.short) == 0 && len(tag.long) == 0{
+                    mem.copy(raw_data(offseted_data), &arg, size_of(string))  
                 }
-            }
+            }else if _, ok := types[j].variant.(reflect.Type_Info_Union); ok { // SUB CMDs
+                    parse_union(offseted_data, args[i:], types[j].id) or_return
             }
         }
-        if field.tag.required && !found {
-            err = MissingFieldError{}
-        }
-        found = false
     }
-    //if !exist {
-    //        err = UnknownFieldError{}
-    //}
-
     return err
+}    
+
+parse_union :: proc(data: []byte, args: []string, id: typeid) -> (err: CLIError)  {
+        info := type_info_of(id)
+        named_info, named_ok := info.variant.(reflect.Type_Info_Named)
+        if named_ok {
+            union_info, union_ok := named_info.base.variant.(reflect.Type_Info_Union)
+            if union_ok {
+                for variant, i in union_info.variants {
+                    named_info, named_ok := variant.variant.(reflect.Type_Info_Named)
+                    if named_ok && args[0] == named_info.name {
+                        tag_index := 0 if union_info.no_nil else 1
+                        data[union_info.tag_offset] = u8(i + tag_index)
+                        parse_struct(data, args[1:], named_info.base)
+                        return nil
+                    }
+                }
+            }
+
+        }
+        return CLIParseError{msg = fmt.tprintf("Unknown command \"%s\"\n", args[0])}
 }
 
-parse :: proc(argv: []string, $T: typeid) -> (res: ^T, err: ParseError) {
-    cmd := Field{
-        id = T,
-        name = "oldone",
-        kind = FieldKind.COMMAND,
-        size = size_of(T),
+
+
+
+parse :: proc(args: []string, $T: typeid) -> (res: T, err: CLIError) {
+    info := type_info_of(typeid_of(T))
+    data := make([]byte, info.size)
+    defer delete(data)
+    if reflect.is_struct(info) {
+        parse_struct(data, args, info) or_return
     }
-    parse_metadata(&cmd, get_metadata(T)) or_return
-    defer delete(cmd.fields)
-    args := parse_argv(argv)
-    defer delete(args)
-    out := make([]byte, size_of(T))
-    transmute_fields(&cmd, args[:], out) or_return
-    //print_help(cmd)
-    res = (^T)(raw_data(out))
-    return res, err 
+    else if reflect.is_union(info) {
+        parse_union(data, args, T) or_return
+    }
+    res = mem.reinterpret_copy(T, raw_data(data))
+    return res, nil
 }
 
-//free_parse :: proc($T: typeid, value: ^T) {
-//    if value != nil {
-//        free(value)
-//    }
-//}
+
+scmd :: struct {
+    aaa: bool   `cli:"a|aaa"`,
+    bbb: string `cli:"b|bbb"`,
+    ccc: [3]string `cli:"c|ccc"`,
+    ddd: string,
+    eee: enum {
+        arg1,
+        arg2
+    }`cli:"e|eee"`,
+    fff: [3]enum {
+        fff1,
+        fff2,
+        fff3
+    }`cli:"f|fff"`
+}
+
+ucmd :: union {
+    scmd
+}
+
+@(test)
+general_test :: proc(t: ^testing.T) {
+    //parse(os.args[1:], ucmd)
+    argv := []string{"scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4",
+        "-fff:fff2,fff3,fff2", "position1"}
+    res, err := parse(argv, ucmd)
+    
+    log.debug(res)
+    log.debug(err)
+
+}
