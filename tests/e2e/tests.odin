@@ -26,11 +26,19 @@ tests :: union {
     scmd, 
 }
 
+//@(test)
+//general_test :: proc(t: ^testing.T) {
+//    //parse(os.args[1:], ucmd)
+//    argv := []string{"scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4",
+//        "-fff:fff2,fff3,fff2", "position1"}
+//    res, err := lib.parse(argv, tests)
+//}
+
 @(test)
-general_test :: proc(t: ^testing.T) {
+print_test :: proc(t: ^testing.T) {
     //parse(os.args[1:], ucmd)
-    argv := []string{"scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4",
-        "-fff:fff2,fff3,fff2", "position1"}
-    res, err := lib.parse(argv, tests)
-    log.error(res)
+    //argv := []string{"scmdd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4",
+    //    "-fff:fff2,fff3,fff2", "position1"}
+    //res, err := lib.parse(argv, tests)
+    lib.print_help("tests scmd", type_info_of(scmd))
 }

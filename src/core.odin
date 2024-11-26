@@ -8,8 +8,15 @@ import "core:os"
 import "core:strings"
 import "core:fmt"
 
+
+// - [ ]: full error handling
+//  - [ ]: required
+//  - [ ]: Unknown (not exist)
+//  - [ ]: bad usage
+
 CLIParseError :: struct {
-    msg: string,
+    path: string,
+    type_info: ^reflect.Type_Info,
 }
 
 CLIError :: union {
@@ -22,7 +29,6 @@ Tag :: struct {
     short:      string,
     long:       string,
     value:      string,
-    options:    []string,
 }
 
 parse_tag :: proc(tag_type: reflect.Struct_Tag) -> (tag: Tag, exist: bool) {
@@ -58,7 +64,9 @@ arg_value :: proc(raw_arg: string) -> string {
 }
 
 
-parse_struct :: proc(data: []byte, args: []string, info: ^reflect.Type_Info) -> (err: CLIError){
+parse_struct :: proc(data: []byte, args: []string, info: ^reflect.Type_Info, parent_path: string) -> (err: CLIError){
+    named_info, _ := info.variant.(reflect.Type_Info_Named)
+    path := fmt.tprintf("%s %s", parent_path, named_info.name)
     names :=    reflect.struct_field_names(info.id)
     tags :=     reflect.struct_field_tags(info.id)
     types :=    reflect.struct_field_types(info.id)
@@ -109,35 +117,48 @@ parse_struct :: proc(data: []byte, args: []string, info: ^reflect.Type_Info) -> 
                     mem.copy(raw_data(offseted_data), &arg, size_of(string))  
                 }
             }else if _, ok := types[j].variant.(reflect.Type_Info_Union); ok { // SUB CMDs
-                    parse_union(offseted_data, args[i:], types[j].id) or_return
+                    parse_union(offseted_data, args[i:], types[j].id, parent_path) or_return
             }
         }
     }
     return err
 }    
 
-parse_union :: proc(data: []byte, args: []string, id: typeid) -> CLIError  {
+parse_union :: proc(data: []byte, args: []string, id: typeid, parent_path: string) -> CLIError  {
         info := type_info_of(id)
         named_info, named_ok := info.variant.(reflect.Type_Info_Named)
         if !named_ok {
-            return CLIParseError{msg = fmt.tprintf("Internal Error \"%s\"\n", args[0])}
+            return CLIParseError{
+                path = "", 
+                type_info=info
+            }
         }
         union_info, union_ok := named_info.base.variant.(reflect.Type_Info_Union)
         if !union_ok {
-            return CLIParseError{msg = fmt.tprintf("Internal Error \"%s\"\n", args[0])}
+            return CLIParseError{
+                path = "", 
+                type_info=info
+            }
         }
 
         for variant, i in union_info.variants {
             named_info, named_ok := variant.variant.(reflect.Type_Info_Named)
             if !named_ok {
-                return CLIParseError{msg = fmt.tprintf("Internal Error \"%s\"\n", args[0])}
+                return CLIParseError{
+                    path = "", 
+                    type_info=info
+                }
             }
             if args[0] == named_info.name {
+                path := fmt.tprintf("%s %s", parent_path, named_info.name)
                 tag_index := 0 if union_info.no_nil else 1
                 data[union_info.tag_offset] = u8(i + tag_index)
-                parse_struct(data, args[1:], named_info.base)
+                parse_struct(data, args[1:], named_info.base, path)
                 return nil
             }
         }
-        return CLIParseError{msg = fmt.tprintf("Unknow command \"%s\"\n", args[0])}
+        return CLIParseError{
+            path = parent_path, 
+            type_info=info
+        }
 }

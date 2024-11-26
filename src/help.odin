@@ -7,71 +7,71 @@ import "core:strings"
 
 // - [x]: positional help
 // - [x]: show portion of positional help for unions
-// - [ ]: display help on error
+// - [x]: display help on error
 // - [ ]: enum help
 
-parse_help :: proc(root: string, id: typeid) -> string{
-    info := type_info_of(id)
-    builder := strings.builder_make()
+
+print_help :: proc(
+    path: string, 
+    target: ^reflect.Type_Info, 
+){
+    builder := strings.builder_make() 
     defer strings.builder_destroy(&builder)
     fmt.sbprintf(&builder, "Program desccription\n")
     fmt.sbprintf(&builder, "Usage:\n")
-    named_info, _ := info.variant.(reflect.Type_Info_Named)
-    root_name := named_info.name
-    if len(root) > 0 {
-        root_name = fmt.tprintf("%s %s", root, root_name)
+    if reflect.is_union(target) {
+        print_help_union(&builder, path, target)
     }
-    if reflect.is_struct(info) {
-        parse_help_struct(root_name, &builder, info)
+    else if reflect.is_struct(target) {
+        print_help_struct(&builder, path, target)
     }
-    else if reflect.is_union(info) {
-        parse_help_union(root_name, &builder, info)
-    }
-    return fmt.sbprint(&builder)
+    fmt.println(fmt.sbprint(&builder))
 }
 
+@private
+print_help_union :: proc(
+    builder: ^strings.Builder,
+    path: string, 
+    target: ^reflect.Type_Info, 
+) {
+    named_target, _ := target.variant.(reflect.Type_Info_Named)
+    union_target, _ := named_target.base.variant.(reflect.Type_Info_Union)
+    fmt.sbprintf(builder, "\t%s command [arguments]\n", path)
+    fmt.sbprintf(builder, "Commands:\n")
 
-
-parse_help_union :: proc(parent_name: string, builder: ^strings.Builder, info: ^reflect.Type_Info) {
-    named_info, named_ok := info.variant.(reflect.Type_Info_Named)
-    if named_ok {
-        named_info, named_ok := info.variant.(reflect.Type_Info_Named)
-        fmt.sbprintf(builder, "\t%s command [arguments]\n", parent_name)
-        fmt.sbprintf(builder, "Commands:\n")
-        union_info, union_ok := named_info.base.variant.(reflect.Type_Info_Union)
-        if union_ok {
-            for variant, i in union_info.variants {
-                named_info, named_ok := variant.variant.(reflect.Type_Info_Named)
-                if named_ok {
-                    help := ""
-                    names := reflect.struct_field_names(named_info.base.id)
-                    if names[len(names) - 1] == "help" {
-                        tags := reflect.struct_field_tags(named_info.base.id)
-                        tag, _ := parse_tag(tags[len(tags) - 1])
-                        index := strings.index(tag.help, "\n")
-                        help = tag.help
-                        if index >= 0 {
-                            help = tag.help[:index]
-                        }
-                    }
-                    fmt.sbprintf(builder, "\t%s\t%s\n", named_info.name, help)
-                }
+    for variant, i in union_target.variants {
+        named_variant, _ := variant.variant.(reflect.Type_Info_Named)
+        names := reflect.struct_field_names(named_variant.base.id)
+        help := ""
+        if names[len(names) - 1] == "help" {
+            tags := reflect.struct_field_tags(named_variant.base.id)
+            tag, _ := parse_tag(tags[len(tags) - 1])
+            index := strings.index(tag.help, "\n")
+            help = tag.help
+            if index >= 0 {
+                help = tag.help[:index]
             }
         }
+        fmt.sbprintf(builder, "\t%s\t%s\n", named_variant.name, help)
     }
 }
 
-parse_help_struct :: proc(parent_name: string, builder: ^strings.Builder, info: ^reflect.Type_Info) {
-    names :=    reflect.struct_field_names(info.id)
-    tags :=     reflect.struct_field_tags(info.id)
-    types :=    reflect.struct_field_types(info.id)
+@private
+print_help_struct :: proc(
+    builder: ^strings.Builder,
+    path: string, 
+    target: ^reflect.Type_Info, 
+) {
+    names :=    reflect.struct_field_names(target.id)
+    tags :=     reflect.struct_field_tags(target.id)
+    types :=    reflect.struct_field_types(target.id)
     builder_flags := strings.builder_make()
     defer strings.builder_destroy(&builder_flags)
     builder_positional := strings.builder_make()
     defer strings.builder_destroy(&builder_positional)
-    named_info, named_ok := info.variant.(reflect.Type_Info_Named)
+    named_info, named_ok := target.variant.(reflect.Type_Info_Named)
     if named_ok {
-        fmt.sbprintf(builder, "\t%s [arguments]\n\n", parent_name)
+        fmt.sbprintf(builder, "\t%s [arguments]\n\n", path)
     }
     fmt.sbprintf(&builder_positional, "\t%s\t", named_info.name)
     if names[len(names)-1] == "help" {
@@ -113,3 +113,4 @@ parse_help_struct :: proc(parent_name: string, builder: ^strings.Builder, info: 
     flags_str := fmt.sbprint(&builder_flags, "")
     fmt.sbprintf(builder, "%s\n%s", positional_str, flags_str)
 }
+
