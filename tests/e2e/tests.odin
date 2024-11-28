@@ -3,8 +3,9 @@ package e2e
 import "core:log"
 import lib "../../src"
 import "core:testing"
+import "core:os"
 
-scmd :: struct {
+scmd_full :: struct {
     aaa: bool   `cli:"a,aaa"`,
     bbb: string `cli:"b,bbb"`,
     ccc: [3]string `cli:"c,ccc"`,
@@ -22,23 +23,38 @@ scmd :: struct {
                 Exemples: blablalbla"`,
 }
 
+tests_full :: union {
+    scmd, 
+}
+
+
+subcmd :: struct {
+    aaa: bool   `cli:"a,aaa"`,
+}
+
+sub :: union {
+    subcmd, 
+}
+
+scmd :: struct {
+    lll: bool   `cli:"l,lll/required"`,
+    s: union {
+        subcmd, 
+    }
+
+}
+
 tests :: union {
     scmd, 
 }
 
-//@(test)
-//general_test :: proc(t: ^testing.T) {
-//    //parse(os.args[1:], ucmd)
-//    argv := []string{"scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4",
-//        "-fff:fff2,fff3,fff2", "position1"}
-//    res, err := lib.parse(argv, tests)
-//}
+// - [ ] check nil arg from iterator
+// - [x] union named type not always working
 
 @(test)
-print_test :: proc(t: ^testing.T) {
+general_test :: proc(t: ^testing.T) {
     //parse(os.args[1:], ucmd)
-    //argv := []string{"scmdd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4",
-    //    "-fff:fff2,fff3,fff2", "position1"}
-    //res, err := lib.parse(argv, tests)
-    lib.print_help("tests scmd", type_info_of(scmd))
+    //argv := []string{os.args[0], "scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4", "-fff:fff2,fff3,fff2", "position1"}
+    argv := []string{os.args[0], "scmd", "-lll", "subcmd"}
+    res := lib.parse(tests, argv)
 }

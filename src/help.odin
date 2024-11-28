@@ -10,6 +10,34 @@ import "core:strings"
 // - [x]: display help on error
 // - [ ]: enum help
 
+Tag :: struct {
+    help:       string,
+    required:   bool,
+    short:      string,
+    long:       string,
+    value:      string,
+}
+
+parse_tag :: proc(tag_type: reflect.Struct_Tag) -> (tag: Tag) {
+    help, _ := reflect.struct_tag_lookup(tag_type, "help")
+    tag.help = help
+    raw_tag, ok := reflect.struct_tag_lookup(tag_type, "cli")
+    if !ok {
+        return tag
+    }
+    params := strings.split(raw_tag, "/")
+    defer delete(params)
+    for param in params {
+        tag.required = param == "required"
+        tag.value = param[1:len(param)-1] if param[0] == '<' &&
+        param[len(param) - 1] == '>' else tag.value
+        index := strings.index(param, ",") 
+        tag.short = param[:index] if index >= 0 else tag.short
+        tag.long = param[index+1:] if index >= 0 else tag.long
+    }
+    return tag 
+}
+
 
 print_help :: proc(
     path: string, 
@@ -45,7 +73,7 @@ print_help_union :: proc(
         help := ""
         if names[len(names) - 1] == "help" {
             tags := reflect.struct_field_tags(named_variant.base.id)
-            tag, _ := parse_tag(tags[len(tags) - 1])
+            tag := parse_tag(tags[len(tags) - 1])
             index := strings.index(tag.help, "\n")
             help = tag.help
             if index >= 0 {
@@ -75,14 +103,14 @@ print_help_struct :: proc(
     }
     fmt.sbprintf(&builder_positional, "\t%s\t", named_info.name)
     if names[len(names)-1] == "help" {
-        tag, exist := parse_tag(tags[len(names)-1])
+        tag := parse_tag(tags[len(names)-1])
         fmt.sbprintf(&builder_positional, "%s", tag.help)
     }
     fmt.sbprintf(&builder_positional, "\n")
     fmt.sbprintf(&builder_flags, "\tFlags\n")
 
     for name, i in names {
-        tag, exist := parse_tag(tags[i])
+        tag := parse_tag(tags[i])
         flag_name := tag.short if len(tag.long) == 0 else tag.short
         flag_name = names[i] if len(flag_name) == 0 else flag_name
         fmt.sbprintf(&builder_flags, "\t\t-%s\n", flag_name)
