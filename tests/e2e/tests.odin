@@ -57,4 +57,5 @@ general_test :: proc(t: ^testing.T) {
     //argv := []string{os.args[0], "scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4", "-fff:fff2,fff3,fff2", "position1"}
     argv := []string{os.args[0], "scmd", "-lll", "subcmd"}
     res := lib.parse(tests, argv)
+    //log.error(res)
 }

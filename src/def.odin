@@ -20,22 +20,25 @@ CLIError :: union {
     CLIParseError
 }
 
-parse :: proc($T: typeid, args: []string) -> T {
+parse :: proc($T: typeid, args: []string) -> (res: T){
     info := type_info_of(T)
     data := make([]byte, info.size)
+    defer delete(data)
     iterator := args_iterator_make(args)
-    defer args_iterator_destroy(iterator)
-    next_arg(iterator)
-    arg := current_arg(iterator)
+    defer args_iterator_destroy(&iterator)
+    arg, end := next_arg(&iterator)
+    if end {
+        return res
+    }
     root_name := arg.key
-    arg = next_arg(iterator)
-    err := parse_cmd(iterator, info, root_name, data)
+    next_arg(&iterator)
+    err := parse_cmd(&iterator, info, root_name, data)
     if err != nil {
         parse_err, _ := err.(CLIParseError)
         log.error(parse_err)
         //print_help(parse_err.path, parse_err.type_info)
     }
-    res := mem.reinterpret_copy(T, raw_data(data))
+    res = mem.reinterpret_copy(T, raw_data(data))
     return res
 }
 
@@ -49,17 +52,19 @@ parse_cmd :: proc(
     path := parent_path
     arg := current_arg(iterator)
     if reflect.is_union(type_info) {
-        path = fmt.tprintf("%s %s", parent_path, arg.key)
+        path = fmt.tprintf("%s %s", parent_path, arg.values[0])
         found := false
         info_union, _ := type_info.variant.(reflect.Type_Info_Union)
         named_union, ok := type_info.variant.(reflect.Type_Info_Named) 
         if ok {
             info_union, _ =  named_union.base.variant.(reflect.Type_Info_Union)
         }
-        for variant in info_union.variants {
+        for variant, i in info_union.variants {
             named_variant , _ := variant.variant.(reflect.Type_Info_Named) 
-            if arg.key == named_variant.name {
+            if arg.values[0] == named_variant.name {
                 info_struct = named_variant.base
+                tag_index := 0 if info_union.no_nil else 1
+                data[info_union.tag_offset] = u8(i + tag_index)
                 found = true
             }
         }
@@ -67,7 +72,6 @@ parse_cmd :: proc(
            return CLIParseError{path=parent_path, type_info=type_info}
         }
     }    
-    //named_struct, _ := info_struct.variant.(reflect.Type_Info_Named) 
     return parse_params(iterator, info_struct, path, data)
 }
 
@@ -79,7 +83,7 @@ parse_params :: proc(
     parent_path: string, 
     data: []byte
 ) -> CLIError {
-    arg := next_arg(iterator)
+    arg, end := next_arg(iterator)
     names :=    reflect.struct_field_names(type_info.id)
     raw_tags :=     reflect.struct_field_tags(type_info.id)
     types :=    reflect.struct_field_types(type_info.id)
@@ -90,47 +94,82 @@ parse_params :: proc(
     for raw_tag, i in raw_tags {
         tags[i] =  parse_tag(raw_tag)
     }
-    for arg != nil {
+    for !end {
         found := false
         for i in 0..<fields_count {
             if reflect.is_union(types[i]) {
-                for tag in tags[:i] {
-                    if tag.required {
+                if required_tag := get_missing_required(tags[:i]); required_tag != nil {
                         return CLIParseError{path=parent_path, type_info=type_info}
-                    }
                 }
-                return parse_cmd(iterator, types[i], parent_path, data)
+                return parse_cmd(iterator, types[i], parent_path, data[offsets[i]:])
             }
-            else if reflect.is_string(types[i]) && arg.type == ArgType.POSITIONAL {
-
-            }
-            //log.error(tag.short, arg.key, "-", tag.long, arg.key)
-            if tags[i].short == arg.key || tags[i].long == arg.key {
-                found = true
-                tags[i].required = false
-                if reflect.is_string(types[i]) && len(arg.values) == 1 && arg.type == ArgType.FLAG{
-
-                }else if reflect.is_enum(types[i]) && arg.type == ArgType.FLAG{
-
-                }else if reflect.is_boolean(types[i]) && arg.type == ArgType.FLAG{
-
-                }else if reflect.is_array(types[i]) && len(arg.values) > 1 && arg.type == ArgType.FLAG{
-
-                }
-                break
-            }
+            found = parse_flag(&arg, &tags[i], types[i], data[offsets[i]:])
+            if found {break}
         }
-
         if !found {
             return CLIParseError{path=parent_path, type_info=type_info}
         }
-
-        arg = next_arg(iterator)
+        arg, end = next_arg(iterator)
     }
-    for tag in tags {
-        if tag.required {
+
+    if required_tag := get_missing_required(tags); required_tag != nil {
             return CLIParseError{path=parent_path, type_info=type_info}
+    }
+    return nil
+}
+
+parse_flag :: proc(arg: ^Arg, tag: ^Tag, type: ^reflect.Type_Info, data: []byte) -> (found: bool) {
+    if reflect.is_string(type) && arg.type == ArgType.POSITIONAL {
+
+    }
+    else if (tag.short == arg.key || tag.long == arg.key) && arg.type == ArgType.FLAG {
+        found = true
+        tag.required = false
+        #partial switch t in type.variant {
+            case reflect.Type_Info_String: {
+                    mem.copy(raw_data(data), &arg.values[0], type.size)  
+            }
+            case reflect.Type_Info_Enum: {
+                for f, i in t.names {
+                    if arg.values[0] == f {
+                        mem.copy(raw_data(data), &t.values[i], type.size)  
+                    }
+                }
+            }
+            case reflect.Type_Info_Boolean: {
+                data[0] = 1
+            }
+            case reflect.Type_Info_Array: {
+                if enum_type, ok := t.elem.variant.(reflect.Type_Info_Enum); ok { // N OPTIONS
+                        for v, i in arg.values {
+                            for e, j in enum_type.names {
+                                if v == e {
+                                    mem.copy(
+                                        raw_data(data[i*size_of(reflect.Type_Info_Enum_Value):]), 
+                                        &enum_type.values[j], 
+                                        size_of(reflect.Type_Info_Enum_Value))  
+                                }
+                            }
+                        }
+                }
+                else if reflect.is_string(t.elem){
+                    if len(arg.values) <= t.count {
+                        mem.copy(
+                            raw_data(data), 
+                            raw_data(arg.values),
+                            len(arg.values)*size_of(string)
+                        )  
+                    }
+                }
+            }
         }
+    }
+    return found
+}
+
+get_missing_required :: proc(tags: []Tag) -> (required_tag: ^Tag) {
+    for tag in tags {
+         if tag.required {return required_tag}
     }
     return nil
 }
