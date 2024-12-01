@@ -37,11 +37,12 @@ sub :: union {
 }
 
 scmd :: struct {
-    lll: bool   `cli:"l,lll/required"`,
+    lll: bool   `cli:"l,lll/required/<filename>" help:"Just a test flag my dear"`,
     s: union {
         subcmd, 
-    }
-
+    },
+    help: bool   `help:"This is a test command.
+                Exemples: blablalbla"`,
 }
 
 tests :: union {
@@ -51,11 +52,21 @@ tests :: union {
 // - [ ] check nil arg from iterator
 // - [x] union named type not always working
 
+//@(test)
+//general_test :: proc(t: ^testing.T) {
+//    //parse(os.args[1:], ucmd)
+//    //argv := []string{os.args[0], "scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4", "-fff:fff2,fff3,fff2", "position1"}
+//    argv := []string{os.args[0], "scmd", "-lll", "subcmd"}
+//    res := lib.parse(tests, argv)
+//    //log.error(res)
+//}
+
+
 @(test)
-general_test :: proc(t: ^testing.T) {
+help_test :: proc(t: ^testing.T) {
     //parse(os.args[1:], ucmd)
     //argv := []string{os.args[0], "scmd", "-aaa", "-bbb:hello", "-ccc:je,suis", "-eee:arg4", "-fff:fff2,fff3,fff2", "position1"}
-    argv := []string{os.args[0], "scmd", "-lll", "subcmd"}
+    argv := []string{os.args[0], "scmd", "subcmd"}
     res := lib.parse(tests, argv)
     //log.error(res)
 }

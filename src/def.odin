@@ -1,25 +1,16 @@
 package oldone
-
 import "core:reflect"
 import "core:mem"
 import "core:log"
 import "core:fmt"
 import "core:strings"
-
-// - [ ]: full error handling
-//  - [x]: Unknown (not exist)
-//  - [ ]: bad usage
-//  - [ ]: required
-
 CLIParseError :: struct {
     path: string,
     type_info: ^reflect.Type_Info,
 }
-
 CLIError :: union {
     CLIParseError
 }
-
 parse :: proc($T: typeid, args: []string) -> (res: T){
     info := type_info_of(T)
     data := make([]byte, info.size)
@@ -30,18 +21,16 @@ parse :: proc($T: typeid, args: []string) -> (res: T){
     if end {
         return res
     }
-    root_name := arg.key
+    root_name := arg.values[0]
     next_arg(&iterator)
     err := parse_cmd(&iterator, info, root_name, data)
     if err != nil {
         parse_err, _ := err.(CLIParseError)
-        log.error(parse_err)
-        //print_help(parse_err.path, parse_err.type_info)
+        print_help(parse_err.path, parse_err.type_info)
     }
     res = mem.reinterpret_copy(T, raw_data(data))
     return res
 }
-
 parse_cmd :: proc(
     iterator: ^ArgsIterator, 
     type_info: ^reflect.Type_Info,
@@ -74,26 +63,29 @@ parse_cmd :: proc(
     }    
     return parse_params(iterator, info_struct, path, data)
 }
-
-
-
 parse_params :: proc(
     iterator: ^ArgsIterator, 
     type_info: ^reflect.Type_Info,
     parent_path: string, 
     data: []byte
 ) -> CLIError {
+
     arg, end := next_arg(iterator)
+
     names :=    reflect.struct_field_names(type_info.id)
     raw_tags :=     reflect.struct_field_tags(type_info.id)
     types :=    reflect.struct_field_types(type_info.id)
     offsets :=  reflect.struct_field_offsets(type_info.id)
+
     fields_count := len(names)
+
     tags := make([]Tag, len(raw_tags))
     defer delete(tags)
+
     for raw_tag, i in raw_tags {
         tags[i] =  parse_tag(raw_tag)
     }
+
     for !end {
         found := false
         for i in 0..<fields_count {
@@ -111,7 +103,6 @@ parse_params :: proc(
         }
         arg, end = next_arg(iterator)
     }
-
     if required_tag := get_missing_required(tags); required_tag != nil {
             return CLIParseError{path=parent_path, type_info=type_info}
     }
@@ -120,7 +111,9 @@ parse_params :: proc(
 
 parse_flag :: proc(arg: ^Arg, tag: ^Tag, type: ^reflect.Type_Info, data: []byte) -> (found: bool) {
     if reflect.is_string(type) && arg.type == ArgType.POSITIONAL {
-
+        found = true
+        tag.required = false
+        mem.copy(raw_data(data), &arg.values[0], type.size)  
     }
     else if (tag.short == arg.key || tag.long == arg.key) && arg.type == ArgType.FLAG {
         found = true
@@ -166,10 +159,9 @@ parse_flag :: proc(arg: ^Arg, tag: ^Tag, type: ^reflect.Type_Info, data: []byte)
     }
     return found
 }
-
-get_missing_required :: proc(tags: []Tag) -> (required_tag: ^Tag) {
-    for tag in tags {
-         if tag.required {return required_tag}
+get_missing_required :: proc(tags: []Tag) -> ^Tag {
+    for &tag in tags {
+         if tag.required {return &tag}
     }
     return nil
 }
