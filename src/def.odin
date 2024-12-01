@@ -22,8 +22,13 @@ parse :: proc($T: typeid, args: []string) -> (res: T){
         return res
     }
     root_name := arg.values[0]
-    next_arg(&iterator)
-    err := parse_cmd(&iterator, info, root_name, data)
+    err : CLIError = nil
+    if reflect.is_union(type_info_of(T)) {
+        next_arg(&iterator)
+        err = parse_cmd(&iterator, info, root_name, data)
+    }else {
+        err = parse_params(&iterator, info, root_name, data)
+    }
     if err != nil {
         parse_err, _ := err.(CLIParseError)
         print_help(parse_err.path, parse_err.type_info)
@@ -85,17 +90,20 @@ parse_params :: proc(
     for raw_tag, i in raw_tags {
         tags[i] =  parse_tag(raw_tag)
     }
-
     for !end {
         found := false
         for i in 0..<fields_count {
-            if reflect.is_union(types[i]) {
+            if reflect.is_union(types[i]) && arg.type == ArgType.POSITIONAL {
                 if required_tag := get_missing_required(tags[:i]); required_tag != nil {
                         return CLIParseError{path=parent_path, type_info=type_info}
                 }
-                return parse_cmd(iterator, types[i], parent_path, data[offsets[i]:])
+                err := parse_cmd(iterator, types[i], parent_path, data[offsets[i]:])
+                if err == nil {
+                    return nil
+                }
+            }else {
+                found = parse_flag(&arg, &tags[i], types[i], data[offsets[i]:])
             }
-            found = parse_flag(&arg, &tags[i], types[i], data[offsets[i]:])
             if found {break}
         }
         if !found {
@@ -118,9 +126,14 @@ parse_flag :: proc(arg: ^Arg, tag: ^Tag, type: ^reflect.Type_Info, data: []byte)
     else if (tag.short == arg.key || tag.long == arg.key) && arg.type == ArgType.FLAG {
         found = true
         tag.required = false
-        #partial switch t in type.variant {
+        type_info := type
+        type_info_named, type_info_named_ok := type.variant.(reflect.Type_Info_Named)
+        if type_info_named_ok {
+            type_info = type_info_named.base
+        }
+        #partial switch t in type_info.variant {
             case reflect.Type_Info_String: {
-                    mem.copy(raw_data(data), &arg.values[0], type.size)  
+                mem.copy(raw_data(data), &arg.values[0], type.size)  
             }
             case reflect.Type_Info_Enum: {
                 for f, i in t.names {
@@ -133,7 +146,9 @@ parse_flag :: proc(arg: ^Arg, tag: ^Tag, type: ^reflect.Type_Info, data: []byte)
                 data[0] = 1
             }
             case reflect.Type_Info_Array: {
-                if enum_type, ok := t.elem.variant.(reflect.Type_Info_Enum); ok { // N OPTIONS
+                named_variant, _ := t.elem.variant.(reflect.Type_Info_Named)
+                if reflect.is_enum(t.elem){ // N OPTIONS
+                        enum_type, ok := named_variant.base.variant.(reflect.Type_Info_Enum)
                         for v, i in arg.values {
                             for e, j in enum_type.names {
                                 if v == e {
