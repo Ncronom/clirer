@@ -1,32 +1,8 @@
-package e2e
-
+package clirer
 import "core:log"
-import lib "../../src"
 import "core:testing"
 import "core:os"
 
-
-
-subcmd :: struct {
-    aaa: bool   `cli:"a,aaa"`,
-}
-
-sub :: union {
-    subcmd, 
-}
-
-scmd :: struct {
-    lll: bool   `cli:"l,lll/required/<filename>" help:"Just a test flag my dear"`,
-    s: union {
-        subcmd, 
-    },
-    help: bool   `help:"This is a test command.
-                Exemples: blablalbla"`,
-}
-
-tests :: union {
-    scmd, 
-}
 
 
 @(test)
@@ -48,7 +24,7 @@ cmd_test :: proc(t: ^testing.T) {
         "-format:hidden",
         "-by:carenne,jean",
     }
-    res := lib.parse(cmd, argv)
+    res, err :=  parse(cmd, argv)
 
     testing.expectf(
         t, 
@@ -108,7 +84,7 @@ sub_cmd_test :: proc(t: ^testing.T) {
         "-format:hidden",
         "-by:carenne,jean",
     }
-    pre_res := lib.parse(cmds, argv)
+    pre_res, err :=  parse(cmds, argv)
 
     res, ok := pre_res.(cmd)
 
@@ -183,10 +159,9 @@ nested_sub_cmd_test :: proc(t: ^testing.T) {
         "nested",
         "-msg:hello",
     }
-    pre_res := lib.parse(cmds, argv)
+    pre_res, err :=  parse(cmds, argv)
 
     res, ok := pre_res.(cmd)
-
 
     testing.expectf(
         t, 

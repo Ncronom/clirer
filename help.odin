@@ -1,4 +1,4 @@
-package oldone
+package clirer
 
 import "core:log"
 import "core:fmt"
@@ -9,34 +9,6 @@ import "core:strings"
 // - [x]: show portion of positional help for unions
 // - [x]: display help on error
 // - [ ]: enum help
-
-Tag :: struct {
-    help:       string,
-    required:   bool,
-    short:      string,
-    long:       string,
-    value:      string,
-}
-
-parse_tag :: proc(tag_type: reflect.Struct_Tag) -> (tag: Tag) {
-    help, _ := reflect.struct_tag_lookup(tag_type, "help")
-    tag.help = help
-    raw_tag, ok := reflect.struct_tag_lookup(tag_type, "cli")
-    if !ok {
-        return tag
-    }
-    params := strings.split(raw_tag, "/")
-    defer delete(params)
-    for param in params {
-        tag.required = true if param == "required" else tag.required
-        tag.value = param if param[0] == '<' && param[len(param) - 1] == '>' else tag.value
-        index := strings.index(param, ",") 
-        tag.short = param[:index] if index >= 0 else tag.short
-        tag.long = param[index+1:] if index >= 0 else tag.long
-    }
-    return tag 
-}
-
 
 print_help :: proc(
     path: string, 
@@ -58,7 +30,7 @@ print_help :: proc(
     delete(help)
 }
 
-
+@(private)
 get_flag_help :: proc(name: string, tag: Tag, info: ^reflect.Type_Info) -> string {
     builder := strings.builder_make()
     defer strings.builder_destroy(&builder)
@@ -95,7 +67,7 @@ get_flag_help :: proc(name: string, tag: Tag, info: ^reflect.Type_Info) -> strin
     return strings.clone(fmt.sbprint(&builder))
 }
 
-
+@(private)
 get_cmds_help :: proc(info: ^reflect.Type_Info) -> string {
     builder := strings.builder_make()
     defer strings.builder_destroy(&builder)
@@ -124,7 +96,8 @@ get_cmds_help :: proc(info: ^reflect.Type_Info) -> string {
     return res
 }
 
-@private
+
+@(private)
 print_help_union :: proc(
     path: string, 
     target: ^reflect.Type_Info, 
@@ -158,7 +131,7 @@ print_help_union :: proc(
     return strings.clone(fmt.sbprint(&builder))
 }
 
-@private
+@(private)
 print_help_struct :: proc(
     path: string, 
     target: ^reflect.Type_Info, 

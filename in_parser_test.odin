@@ -1,14 +1,25 @@
-package unit
+package clirer
+
 
 import "core:log"
-import lib "../../src"
 import "core:testing"
 import "core:os"
+
+get_data_set :: proc() -> (input: [5]string) {
+    input = [5]string{
+        "C:/Users/name/apps/search.exe", 
+        "-strict",
+        "-prefix:_",
+        "-suffix:_,*",
+        "nomenclature"
+    }
+    return input
+}
 
 @(test)
 user_get_root_name_test :: proc(t: ^testing.T) {
     input := get_data_set() 
-    output := lib.get_root_name(input[0])
+    output := get_root_name(input[0])
     testing.expectf(
         t, 
         output == "search.exe", 
@@ -20,8 +31,8 @@ user_get_root_name_test :: proc(t: ^testing.T) {
 @(test)
 user_args_iterator_make_test :: proc(t: ^testing.T) {
     input := get_data_set() 
-    output := lib.args_iterator_make(input[:])
-    defer lib.args_iterator_destroy(&output)
+    output := args_iterator_make(input[:])
+    defer args_iterator_destroy(&output)
     testing.expectf(
         t, 
         output.args != nil && output.args[0] == "search.exe", 
@@ -34,12 +45,12 @@ user_args_iterator_make_test :: proc(t: ^testing.T) {
 @(test)
 user_next_arg_test :: proc(t: ^testing.T) {
     input := get_data_set() 
-    iterator := lib.args_iterator_make(input[:])
-    defer lib.args_iterator_destroy(&iterator)
-    arg, end := lib.Arg{}, false
+    iterator := args_iterator_make(input[:])
+    defer args_iterator_destroy(&iterator)
+    arg, end := Arg{}, false
     i := -1
     for !end {
-        arg, end = lib.next_arg(&iterator)
+        arg, end = next_arg(&iterator)
         i += 1
         testing.expectf(
             t, 
@@ -60,14 +71,14 @@ user_next_arg_test :: proc(t: ^testing.T) {
 user_parse_args_test :: proc(t: ^testing.T) {
 
     input := get_data_set() 
-    iterator := lib.args_iterator_make(input[:])
-    defer lib.args_iterator_destroy(&iterator)
+    iterator := args_iterator_make(input[:])
+    defer args_iterator_destroy(&iterator)
 
-    res_root        := lib.parse_arg(iterator.args[:])
-    res_switch      := lib.parse_arg(iterator.args[1:])
-    res_single      := lib.parse_arg(iterator.args[2:])
-    res_many        := lib.parse_arg(iterator.args[3:])
-    res_pos         := lib.parse_arg(iterator.args[4:])
+    res_root        := parse_arg(iterator.args[:])
+    res_switch      := parse_arg(iterator.args[1:])
+    res_single      := parse_arg(iterator.args[2:])
+    res_many        := parse_arg(iterator.args[3:])
+    res_pos         := parse_arg(iterator.args[4:])
 
     defer delete(res_root.values) 
     defer delete(res_switch.values) 
@@ -76,34 +87,34 @@ user_parse_args_test :: proc(t: ^testing.T) {
     defer delete(res_pos.values) 
 
     expect_root     := 
-        lib.Arg{
+        Arg{
             key="",
             values=[]string{"search.exe"},
-            type=lib.ArgType.POSITIONAL
+            type= ArgType.POSITIONAL
         }
     expect_switch   := 
-        lib.Arg{
+        Arg{
             key="strict",
             values=nil,
-            type=lib.ArgType.FLAG
+            type=ArgType.FLAG
         }
     expect_single   := 
-        lib.Arg{
+        Arg{
             key="prefix",
             values=[]string{"_"},
-            type=lib.ArgType.FLAG
+            type=ArgType.FLAG
         }
     expect_many     := 
-        lib.Arg{
+         Arg{
             key="suffix",
             values=[]string{"_", "*"},
-            type=lib.ArgType.FLAG
+            type= ArgType.FLAG
         }
     expect_pos      := 
-        lib.Arg{
+         Arg{
             key="",
             values=[]string{"nomenclature"},
-            type=lib.ArgType.POSITIONAL
+            type= ArgType.POSITIONAL
         }
 
     output_root     :=

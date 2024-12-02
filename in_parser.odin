@@ -1,4 +1,5 @@
-package oldone
+#+private
+package clirer
 import "core:strings"
 LEGACY :: #config(FORMAT, false)
 ArgType :: enum {

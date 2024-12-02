@@ -1,51 +1,48 @@
-package oldone
+#+private
+package clirer
 import "core:reflect"
 import "core:mem"
 import "core:log"
 import "core:fmt"
 import "core:strings"
-CLIParseError :: struct {
-    path: string,
-    type_info: ^reflect.Type_Info,
+
+Tag :: struct {
+    help:       string,
+    required:   bool,
+    short:      string,
+    long:       string,
+    value:      string,
 }
-CLIError :: union {
-    CLIParseError
+
+parse_tag :: proc(tag_type: reflect.Struct_Tag) -> (tag: Tag) {
+    help, _ := reflect.struct_tag_lookup(tag_type, "help")
+    tag.help = help
+    raw_tag, ok := reflect.struct_tag_lookup(tag_type, "cli")
+    if !ok {
+        return tag
+    }
+    params := strings.split(raw_tag, "/")
+    defer delete(params)
+    for param in params {
+        tag.required = true if param == "required" else tag.required
+        tag.value = param if param[0] == '<' && param[len(param) - 1] == '>' else tag.value
+        index := strings.index(param, ",") 
+        tag.short = param[:index] if index >= 0 else tag.short
+        tag.long = param[index+1:] if index >= 0 else tag.long
+    }
+    return tag 
 }
-parse :: proc($T: typeid, args: []string) -> (res: T){
-    info := type_info_of(T)
-    data := make([]byte, info.size)
-    defer delete(data)
-    iterator := args_iterator_make(args)
-    defer args_iterator_destroy(&iterator)
-    arg, end := next_arg(&iterator)
-    if end {
-        return res
-    }
-    root_name := arg.values[0]
-    err : CLIError = nil
-    if reflect.is_union(type_info_of(T)) {
-        next_arg(&iterator)
-        err = parse_cmd(&iterator, info, root_name, data)
-    }else {
-        err = parse_params(&iterator, info, root_name, data)
-    }
-    if err != nil {
-        parse_err, _ := err.(CLIParseError)
-        print_help(parse_err.path, parse_err.type_info)
-    }
-    res = mem.reinterpret_copy(T, raw_data(data))
-    return res
-}
+
 parse_cmd :: proc(
     iterator: ^ArgsIterator, 
     type_info: ^reflect.Type_Info,
     parent_path: string, 
     data: []byte
-) -> CLIError{
+) -> Error{
     info_struct := type_info
     path := parent_path
     arg := current_arg(iterator)
-    if reflect.is_union(type_info) {
+    if reflect.is_union(type_info) && arg.type == ArgType.POSITIONAL {
         path = fmt.tprintf("%s %s", parent_path, arg.values[0])
         found := false
         info_union, _ := type_info.variant.(reflect.Type_Info_Union)
@@ -60,20 +57,18 @@ parse_cmd :: proc(
                 tag_index := 0 if info_union.no_nil else 1
                 data[info_union.tag_offset] = u8(i + tag_index)
                 found = true
+                return parse_params(iterator, info_struct, path, data)
             }
         }
-        if !found {
-           return CLIParseError{path=parent_path, type_info=type_info}
-        }
     }    
-    return parse_params(iterator, info_struct, path, data)
+    return new_error_unknown(parent_path, type_info)
 }
 parse_params :: proc(
     iterator: ^ArgsIterator, 
     type_info: ^reflect.Type_Info,
     parent_path: string, 
     data: []byte
-) -> CLIError {
+) -> Error {
 
     arg, end := next_arg(iterator)
 
@@ -95,7 +90,7 @@ parse_params :: proc(
         for i in 0..<fields_count {
             if reflect.is_union(types[i]) && arg.type == ArgType.POSITIONAL {
                 if required_tag := get_missing_required(tags[:i]); required_tag != nil {
-                        return CLIParseError{path=parent_path, type_info=type_info}
+                        return new_error_missing(parent_path, type_info)
                 }
                 err := parse_cmd(iterator, types[i], parent_path, data[offsets[i]:])
                 if err == nil {
@@ -107,12 +102,12 @@ parse_params :: proc(
             if found {break}
         }
         if !found {
-            return CLIParseError{path=parent_path, type_info=type_info}
+            return new_error_unknown(parent_path, type_info)
         }
         arg, end = next_arg(iterator)
     }
     if required_tag := get_missing_required(tags); required_tag != nil {
-            return CLIParseError{path=parent_path, type_info=type_info}
+        return new_error_missing(parent_path, type_info)
     }
     return nil
 }
