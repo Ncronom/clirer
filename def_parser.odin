@@ -4,6 +4,7 @@ import "core:reflect"
 import "core:mem"
 import "core:log"
 import "core:fmt"
+import "core:slice"
 import "core:strings"
 
 Tag :: struct {
@@ -33,7 +34,7 @@ parse_tag :: proc(tag_type: reflect.Struct_Tag) -> (tag: Tag) {
     return tag 
 }
 
-parse_cmd :: proc(
+parse_union :: proc(
     iterator: ^ArgsIterator, 
     type_info: ^reflect.Type_Info,
     parent_path: string, 
@@ -57,121 +58,211 @@ parse_cmd :: proc(
                 tag_index := 0 if info_union.no_nil else 1
                 data[info_union.tag_offset] = u8(i + tag_index)
                 found = true
-                return parse_params(iterator, info_struct, path, data)
+                return parse_struct(iterator, info_struct, path, data)
             }
         }
     }    
-    return new_error_unknown(parent_path, type_info)
+    return new_error_unknown_cmd(parent_path, type_info)
 }
-parse_params :: proc(
-    iterator: ^ArgsIterator, 
-    type_info: ^reflect.Type_Info,
-    parent_path: string, 
-    data: []byte
-) -> Error {
 
-    arg, end := next_arg(iterator)
+get_sub_cmds :: proc(type_info: ^reflect.Type_Info) -> []^reflect.Type_Info {
+    info_union, _ := type_info.variant.(reflect.Type_Info_Union)
+    named_union, ok := type_info.variant.(reflect.Type_Info_Named) 
+    if ok {
+        info_union, _ =  named_union.base.variant.(reflect.Type_Info_Union)
+    }
+	return info_union.variants
+}
 
-    names :=    reflect.struct_field_names(type_info.id)
-    raw_tags :=     reflect.struct_field_tags(type_info.id)
-    types :=    reflect.struct_field_types(type_info.id)
-    offsets :=  reflect.struct_field_offsets(type_info.id)
+get_sub_cmd_name :: proc(type_info: ^reflect.Type_Info) -> (res: string) {
+    named, _ := type_info.variant.(reflect.Type_Info_Named) 
+	res = named.name
+	return res
+}
 
-    fields_count := len(names)
 
-    tags := make([]Tag, len(raw_tags))
-    defer delete(tags)
+get_sub_cmd_names :: proc(
+	type_info: ^reflect.Type_Info, 
+	allocator := context.allocator
+) -> (names: []string) {
+	sub_cmds := get_sub_cmds(type_info)
+	names = make([]string, len(sub_cmds), allocator)
+	for cmd, i in sub_cmds {
+		names[i] = get_sub_cmd_name(cmd)	
+	}
+	return names
+}
 
+
+is_sub_cmd_of :: proc(name: string, type_info: ^reflect.Type_Info) -> bool {
+	sub_cmds := get_sub_cmds(type_info)
+	for cmd in sub_cmds {
+		sub_cmd_name := get_sub_cmd_name(cmd)
+		// CHECK ID ARG IS COMMAND
+		if(name == sub_cmd_name) {
+			return true
+		}
+	}
+	return false
+}
+
+parse_tags :: proc(raw_tags: []reflect.Struct_Tag, allocator := context.allocator) -> []Tag {
+    tags := make([]Tag, len(raw_tags), allocator)
     for raw_tag, i in raw_tags {
         tags[i] =  parse_tag(raw_tag)
     }
-    for !end {
-        found := false
-        for i in 0..<fields_count {
-            if reflect.is_union(types[i]) && arg.type == ArgType.POSITIONAL {
-                if required_tag := get_missing_required(tags[:i]); required_tag != nil {
-                        return new_error_missing(parent_path, type_info)
-                }
-                err := parse_cmd(iterator, types[i], parent_path, data[offsets[i]:])
-                if err == nil {
-                    return nil
-                }
-            }else {
-                found = parse_flag(&arg, &tags[i], types[i], data[offsets[i]:])
-            }
-            if found {break}
-        }
-        if !found {
-            return new_error_unknown(parent_path, type_info)
-        }
-        arg, end = next_arg(iterator)
-    }
-    if required_tag := get_missing_required(tags); required_tag != nil {
-        return new_error_missing(parent_path, type_info)
+	return tags
+}
+
+resolve_required :: proc(
+	tags: 	[]Tag,
+	struct_info: 	^reflect.Type_Info,
+	parent_path:	string,
+) -> Error {
+	required := false
+    for tag in tags {
+         if tag.required {return new_error_missing(parent_path, struct_info)}
     }
     return nil
 }
 
-parse_flag :: proc(arg: ^Arg, tag: ^Tag, type: ^reflect.Type_Info, data: []byte) -> (found: bool) {
-    if reflect.is_string(type) && arg.type == ArgType.POSITIONAL {
-        found = true
-        tag.required = false
-        mem.copy(raw_data(data), &arg.values[0], type.size)  
-    }
-    else if (tag.short == arg.key || tag.long == arg.key) && arg.type == ArgType.FLAG {
-        found = true
-        tag.required = false
-        type_info := type
-        type_info_named, type_info_named_ok := type.variant.(reflect.Type_Info_Named)
-        if type_info_named_ok {
-            type_info = type_info_named.base
-        }
-        #partial switch t in type_info.variant {
-            case reflect.Type_Info_String: {
-                mem.copy(raw_data(data), &arg.values[0], type.size)  
-            }
-            case reflect.Type_Info_Enum: {
-                for f, i in t.names {
-                    if arg.values[0] == f {
-                        mem.copy(raw_data(data), &t.values[i], type.size)  
-                    }
-                }
-            }
-            case reflect.Type_Info_Boolean: {
-                data[0] = 1
-            }
-            case reflect.Type_Info_Array: {
-                named_variant, _ := t.elem.variant.(reflect.Type_Info_Named)
-                if reflect.is_enum(t.elem){ // N OPTIONS
-                        enum_type, ok := named_variant.base.variant.(reflect.Type_Info_Enum)
-                        for v, i in arg.values {
-                            for e, j in enum_type.names {
-                                if v == e {
-                                    mem.copy(
-                                        raw_data(data[i*size_of(reflect.Type_Info_Enum_Value):]), 
-                                        &enum_type.values[j], 
-                                        size_of(reflect.Type_Info_Enum_Value))  
-                                }
-                            }
-                        }
-                }
-                else if reflect.is_string(t.elem){
-                    if len(arg.values) <= t.count {
-                        mem.copy(
-                            raw_data(data), 
-                            raw_data(arg.values),
-                            len(arg.values)*size_of(string)
-                        )  
-                    }
-                }
-            }
-        }
-    }
-    return found
+get_positional :: proc(
+	types: []^reflect.Type_Info, 
+	raw_tags: []reflect.Struct_Tag, 
+	start: int,
+) -> int{
+	for type, i in types[start:] {
+		if is_positional(type, raw_tags[i]) {
+			return start + i
+		}
+	}
+	return -1
 }
-get_missing_required :: proc(tags: []Tag) -> ^Tag {
-    for &tag in tags {
-         if tag.required {return &tag}
-    }
+
+
+parse_struct :: proc(
+    iterator: ^ArgsIterator, 
+    struct_info: ^reflect.Type_Info,
+    parent_path: string, 
+    data: []byte
+) -> (err: Error) {
+
+    arg, end := next_arg(iterator)
+
+    names :=    reflect.struct_field_names(struct_info.id)
+    raw_tags :=     reflect.struct_field_tags(struct_info.id)
+    types :=    reflect.struct_field_types(struct_info.id)
+    offsets :=  reflect.struct_field_offsets(struct_info.id)
+
+    tags := parse_tags(raw_tags)
+    defer delete(tags)
+
+	// FIND SUB COMMAND
+	sub_cmd_names: []string = nil
+	sub_cmds_index:= -1
+	defer {
+		if sub_cmd_names != nil {
+			delete(sub_cmd_names) 
+		}
+	}
+	for type, i in types {
+		if reflect.is_union(type) {
+			sub_cmds_index = i
+			sub_cmd_names = get_sub_cmd_names(type)
+			break
+		}
+	}
+
+	last_positional_index := get_positional(types, raw_tags, 0)
+
+    for !end {
+		#partial switch arg.type {
+		case ArgType.POSITIONAL:{
+			if slice.contains(sub_cmd_names, arg.values[0]) {
+				resolve_required(tags, struct_info, parent_path) or_return
+				return parse_union(iterator, types[sub_cmds_index], parent_path, data[offsets[sub_cmds_index]:])
+			}
+			if last_positional_index == -1{
+				return new_error_unknown_flag(parent_path, struct_info)
+			}
+        	tags[last_positional_index].required = false
+        	mem.copy(raw_data(data[offsets[last_positional_index]:]), &arg.values[0], types[last_positional_index].size)  
+			last_positional_index = get_positional(types, raw_tags, last_positional_index)
+		}
+		case ArgType.FLAG:{
+			parse_flag(&arg, types, offsets, tags, parent_path, struct_info, data) or_return
+		}
+		}
+    	arg, end = next_arg(iterator)
+	}
+	resolve_required(tags, struct_info, parent_path) or_return
+    return nil
+}
+
+parse_flag :: proc(
+	arg: 		^Arg, 
+	types: 		[]^reflect.Type_Info, 
+	offsets: 	[]uintptr, 
+	tags: 		[]Tag,  
+    parent_path: string, 
+    struct_info: ^reflect.Type_Info,
+	data: 		[]byte,
+) -> Error {
+	found := false
+	for type, i in types {
+    	if (tags[i].short == arg.key || tags[i].long == arg.key) && arg.type == ArgType.FLAG {
+    	    found = true
+    	    tags[i].required = false
+    	    type_info := type
+    	    type_info_named, type_info_named_ok := type.variant.(reflect.Type_Info_Named)
+    	    if type_info_named_ok {
+    	        type_info = type_info_named.base
+    	    }
+    	    #partial switch t in type_info.variant {
+    	        case reflect.Type_Info_String: {
+    	            mem.copy(raw_data(data[offsets[i]:]), &arg.values[0], type.size)  
+    	        }
+    	        case reflect.Type_Info_Enum: {
+    	            for f, j in t.names {
+    	                if arg.values[0] == f {
+    	                    mem.copy(raw_data(data[offsets[i]:]), &t.values[j], type.size)  
+    	                }
+    	            }
+    	        }
+    	        case reflect.Type_Info_Boolean: {
+    	            data[offsets[i]] = 1
+    	        }
+    	        case reflect.Type_Info_Array: {
+    	            if reflect.is_enum(t.elem){ // N OPTIONS
+    	            		named_variant, _ := t.elem.variant.(reflect.Type_Info_Named)
+    	                    enum_type, ok := named_variant.base.variant.(reflect.Type_Info_Enum)
+    	                    for v, j in arg.values {
+    	                        for e, k in enum_type.names {
+    	                            if v == e {
+    	                                mem.copy(
+    	                                    raw_data(data[offsets[i] + uintptr(k * size_of(reflect.Type_Info_Enum_Value)):]), 
+    	                                    &enum_type.values[k], 
+    	                                    size_of(reflect.Type_Info_Enum_Value)
+										)  
+    	                            }
+    	                        }
+    	                    }
+    	            }
+    	            else if reflect.is_string(t.elem){
+    	                if len(arg.values) <= t.count {
+    	                    mem.copy(
+    	                        raw_data(data[offsets[i]:]), 
+    	                        raw_data(arg.values),
+    	                        len(arg.values)*size_of(string)
+    	                    )  
+    	                }
+    	            }
+    	        }
+    	    }
+    	}
+	}
+	if !found{
+		return new_error_unknown_flag(parent_path, struct_info)
+	}
     return nil
 }

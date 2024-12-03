@@ -1,6 +1,7 @@
 package clirer
 
 import "core:reflect"
+import "core:log"
 import "core:mem"
 
 parse :: proc(
@@ -21,9 +22,9 @@ parse :: proc(
     root_name := arg.values[0]
     if reflect.is_union(type_info_of(T)) {
         next_arg(&iterator)
-        err = parse_cmd(&iterator, info, root_name, data)
+        err = parse_union(&iterator, info, root_name, data)
     }else {
-        err = parse_params(&iterator, info, root_name, data)
+        err = parse_struct(&iterator, info, root_name, data)
     }
     if current_config.help && err != nil {
         handle_error(err)

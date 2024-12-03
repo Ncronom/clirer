@@ -27,11 +27,11 @@ error_unknown_test :: proc(t: ^testing.T) {
         "-by:carenne,jean",
     }
     res, err :=  parse(cmd, argv)
-    parsed_err, ok := err.(ErrorUnknown)
+    parsed_err, ok := err.(ErrorUnknownFlag)
     testing.expectf(
         t, 
         ok, 
-        "Expect Error to be ErrorUnknown, got %v.",
+        "Expect Error to be ErrorUnknownFlag, got %v.",
         typeid_of(type_of(err))
     )
     argv2 := []string{
@@ -44,20 +44,20 @@ error_unknown_test :: proc(t: ^testing.T) {
         "-by:carenne,jean",
     }
     res2, err2 :=  parse(cmds, argv2)
-    parsed_err2, ok2 := err.(ErrorUnknown)
+    parsed_err2, ok2 := err.(ErrorUnknownFlag)
     testing.expectf(
         t, 
         ok2, 
-        "Expect Error to be ErrorUnknown, got %v.",
+        "Expect Error to be ErrorUnknownCmd, got %v.",
         typeid_of(type_of(err))
     )
 
     res3, err3 :=  parse(cmds, argv)
-    parsed_err3, ok3 := err.(ErrorUnknown)
+    parsed_err3, ok3 := err.(ErrorUnknownFlag)
     testing.expectf(
         t, 
         ok3, 
-        "Expect Error to be ErrorUnknown, got %v.",
+        "Expect Error to be ErrorUnknownFlag, got %v.",
         typeid_of(type_of(err))
     )
 }
