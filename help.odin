@@ -17,7 +17,7 @@ print_help :: proc(
 
     builder := strings.builder_make() 
     defer strings.builder_destroy(&builder)
-    fmt.sbprintf(&builder, "Program desccription\n")
+    fmt.sbprintf(&builder, "%s\n", current_config.description)
     fmt.sbprintf(&builder, "Usage:\n")
     str := ""
     switch e in err {
@@ -29,7 +29,10 @@ print_help :: proc(
         fmt.sbprintf(&builder, "\t%s [arguments]\n", e.path)
         str = fmt.sbprint(&builder, get_help_struct(e.path, e.type_info))
     }
-    case ErrorMissing:      {}
+    case ErrorMissing:      {
+        fmt.sbprintf(&builder, "\t%s [arguments]\n", e.path)
+        str = fmt.sbprint(&builder, get_help_struct(e.path, e.type_info))
+	}
     case ErrorValue:        {}
     }
     fmt.println(str)
@@ -49,7 +52,7 @@ get_cmds_help :: proc(info: ^reflect.Type_Info) -> string {
     for variant, i in info_union.variants {
         named_variant, _ := variant.variant.(reflect.Type_Info_Named)
         names := reflect.struct_field_names(named_variant.base.id)
-        if names[len(names) - 1] == "help" {
+        if len(names) > 0 && names[len(names) - 1] == "help" {
             tags := reflect.struct_field_tags(named_variant.base.id)
             tag := parse_tag(tags[len(tags) - 1])
             index := strings.index(tag.help, "\n")
@@ -59,6 +62,7 @@ get_cmds_help :: proc(info: ^reflect.Type_Info) -> string {
             }
         }
         fmt.sbprintf(&builder, "\t%s\t%s\n", named_variant.name, help)
+		help = ""
     }
     res := strings.clone(fmt.sbprint(&builder))
     return res

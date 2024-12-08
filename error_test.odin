@@ -2,6 +2,7 @@ package clirer
 
 import "core:testing"
 import "core:os"
+import "core:log"
 
 @(test)
 error_unknown_test :: proc(t: ^testing.T) {
@@ -89,6 +90,32 @@ error_missing_test :: proc(t: ^testing.T) {
         t, 
         ok, 
         "Expect Error to be ErrorMissing, got %v.",
+        typeid_of(type_of(err))
+    )
+}
+
+@(test)
+error_root_cmd_test :: proc(t: ^testing.T) {
+    cmd1 :: struct {
+		text: string `cli:"required"`
+    }
+    cmd2 :: struct {
+		text: string `cli:"required"`
+    }
+    cmds :: union{
+        cmd1,
+        cmd2
+    }
+    argv := []string{
+        os.args[0], 
+    }
+    res, err :=  parse(cmds, argv)
+    parsed_err, ok := err.(ErrorUnknownCmd)
+	log.error(err)
+    testing.expectf(
+        t, 
+        ok, 
+        "Expect Error to be ErrorUnknownCmd, got %v.",
         typeid_of(type_of(err))
     )
 }

@@ -1,4 +1,3 @@
-#+private
 package clirer
 
 Config :: struct {
@@ -8,6 +7,7 @@ Config :: struct {
     help:           bool,
 }
 
+@private
 DEFAULT_CONFIG :: Config {
     description = "",
     epilog      = "For further details on a command, invoke command help",
@@ -15,4 +15,5 @@ DEFAULT_CONFIG :: Config {
     legacy      = false,
 }
 
+@private
 current_config := Config{}
